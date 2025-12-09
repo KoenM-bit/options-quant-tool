@@ -1,0 +1,54 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Raw data from scrapers
+    database: "{{ env_var('POSTGRES_DB', 'ahold_options') }}"
+    schema: public
+    tables:
+      - name: bronze_fd_overview
+        description: Raw FD.nl overview/market summary data
+        columns:
+          - name: id
+            description: Primary key
+            tests:
+              - unique
+              - not_null
+          - name: ticker
+            description: Stock ticker symbol
+            tests:
+              - not_null
+          - name: peildatum
+            description: Trade date
+          - name: koers
+            description: Current price
+          - name: totaal_volume
+            description: Total options volume
+          - name: totaal_oi
+            description: Total open interest
+
+      - name: bronze_fd_options
+        description: Raw FD.nl options chain data
+        columns:
+          - name: id
+            description: Primary key
+            tests:
+              - unique
+              - not_null
+          - name: ticker
+            description: Stock ticker symbol
+            tests:
+              - not_null
+          - name: option_type
+            description: Call or Put
+            tests:
+              - accepted_values:
+                  values: ['Call', 'Put']
+          - name: strike
+            description: Strike price
+            tests:
+              - not_null
+          - name: expiry_date
+            description: Expiration date
+            tests:
+              - not_null

@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Airflow
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+logs/
+standalone_admin_password.txt
+
+# DBT
+dbt_modules/
+target/
+dbt_packages/
+logs/
+profiles.yml
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Data
+data/raw/
+data/processed/
+data/exports/
+*.csv
+*.parquet
+
+# Docker
+docker-compose.override.yml
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Secrets
+secrets/
+*.pem
+*.key
+credentials.json
+
+# Logs
+*.log

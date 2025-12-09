@@ -1,0 +1,41 @@
+name: 'ahold_options'
+version: '1.2.1'
+config-version: 2
+
+profile: 'ahold_options'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  ahold_options:
+    +materialized: table
+    
+    bronze:
+      +tags: ['bronze', 'raw']
+      +materialized: table
+    
+    silver:
+      +tags: ['silver', 'cleaned']
+      +materialized: table
+    
+    gold:
+      +tags: ['gold', 'analytics']
+      +materialized: table
+
+tests:
+  +severity: warn
+  +store_failures: true
+
+vars:
+  ahold_ticker: 'AD.AS'
+  lookback_days: 90

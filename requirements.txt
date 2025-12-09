@@ -1,0 +1,60 @@
+# Core Dependencies
+apache-airflow==2.8.0
+apache-airflow-providers-postgres==5.10.0
+apache-airflow-providers-docker==3.9.1
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==1.4.51
+alembic==1.13.1
+mysql-connector-python==8.2.0  # For historical data migration
+
+# DBT
+dbt-core==1.7.4
+dbt-postgres==1.7.4
+
+# Web Scraping
+beautifulsoup4==4.12.2
+lxml==4.9.4
+requests==2.31.0
+urllib3~=1.26
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.2
+scipy==1.11.4
+pyarrow==14.0.2  # For Parquet files
+
+# Visualization & Dashboard
+streamlit==1.29.0
+plotly==5.18.0
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Logging & Monitoring
+structlog==23.3.0
+python-json-logger==2.0.7
+
+# Alerts
+slack-sdk==3.26.2
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+faker==21.0.0
+
+# Code Quality
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# Security
+cryptography==41.0.7
+
+# Rate Limiting
+ratelimit==2.2.1
