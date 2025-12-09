@@ -357,7 +357,7 @@ run_dbt_gold_task = PythonOperator(
     dag=dag,
 )
 
-# Export to Parquet for Power BI
+# Export to Parquet and upload to MinIO
 export_parquet_task = PythonOperator(
     task_id='export_to_parquet',
     python_callable=lambda: os.system(
@@ -366,27 +366,29 @@ export_parquet_task = PythonOperator(
     dag=dag,
 )
 
-# Copy to Power BI share (production only)
-copy_to_powerbi_task = PythonOperator(
-    task_id='copy_to_powerbi_share',
+# Sync from MinIO to ClickHouse for analytics
+sync_clickhouse_task = PythonOperator(
+    task_id='sync_to_clickhouse',
     python_callable=lambda: os.system(
-        'cp -r /opt/airflow/data/parquet/* /opt/airflow/powerbi/ 2>/dev/null || echo "Power BI share not mounted"'
+        'python /opt/airflow/scripts/sync_to_clickhouse.py'
     ),
     dag=dag,
 )
 
 # Task dependencies
-# Enhanced pipeline: Bronze → Silver (dedupe) → Greeks → Gold → Export
+# Enhanced pipeline: Bronze → Silver → Greeks → Gold → MinIO → ClickHouse → Power BI
 # 1. Scrape raw data into Bronze
 # 2. DBT Silver: Deduplicate and standardize
 # 3. Calculate Greeks: Enrich Silver with validated Black-Scholes Greeks
 # 4. DBT Gold: Build analytics (GEX, max pain, vol surface, etc.)
-# 5. Export to Parquet for downstream consumption
+# 5. Export to Parquet and upload to MinIO S3-compatible storage (data lake)
+# 6. Sync from MinIO to ClickHouse for fast analytics queries
+# 7. Power BI connects to ClickHouse via DirectQuery
 
 [scrape_overview_task, scrape_options_task] >> validate_data_task
 validate_data_task >> run_dbt_silver_task >> calculate_greeks_task
 calculate_greeks_task >> run_dbt_gold_task >> export_parquet_task
-export_parquet_task >> copy_to_powerbi_task >> success_notification_task
+export_parquet_task >> sync_clickhouse_task >> success_notification_task
 
 # Failure handling
-[scrape_overview_task, scrape_options_task, run_dbt_silver_task, calculate_greeks_task, run_dbt_gold_task, export_parquet_task] >> failure_notification_task
+[scrape_overview_task, scrape_options_task, run_dbt_silver_task, calculate_greeks_task, run_dbt_gold_task, export_parquet_task, sync_clickhouse_task] >> failure_notification_task

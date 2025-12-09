@@ -25,6 +25,13 @@ numpy==1.26.2
 scipy==1.11.4
 pyarrow==14.0.2  # For Parquet files
 
+# Object Storage (S3-compatible)
+boto3==1.34.34  # AWS SDK for S3/MinIO
+minio==7.2.3  # MinIO Python SDK (simpler alternative to boto3)
+
+# Analytics Database
+clickhouse-connect==0.7.0  # ClickHouse Python client
+
 # Visualization & Dashboard
 streamlit==1.29.0
 plotly==5.18.0

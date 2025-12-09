@@ -76,6 +76,20 @@ _AIRFLOW_WWW_USER_PASSWORD=your_admin_password_here
 AHOLD_TICKER=AD.AS
 AHOLD_SYMBOL_CODE=AEX.AH/O
 
+# MinIO S3 Storage
+MINIO_ROOT_USER=admin
+MINIO_ROOT_PASSWORD=your_strong_minio_password
+MINIO_ENDPOINT=minio:9000
+MINIO_BUCKET=options-data
+MINIO_SECURE=false
+
+# ClickHouse Analytics Database
+CLICKHOUSE_HOST=clickhouse
+CLICKHOUSE_PORT=8123
+CLICKHOUSE_DB=ahold_options
+CLICKHOUSE_USER=default
+CLICKHOUSE_PASSWORD=your_strong_clickhouse_password
+
 # Logging
 LOG_LEVEL=INFO
 ```
@@ -185,15 +199,24 @@ deploy:
 
 ### Access Services
 
-- **Airflow UI**: `http://synology-ip:8080`
-- **PostgreSQL**: `synology-ip:5432`
+- **Airflow UI**: `http://synology-ip:8091`
+- **Adminer (DB GUI)**: `http://synology-ip:8092`
+- **MinIO Console**: `http://synology-ip:9001`
+- **PostgreSQL**: `synology-ip:5433`
+- **ClickHouse HTTP**: `synology-ip:8123` (for Power BI)
+- **ClickHouse Native**: `synology-ip:9002`
 
 ### Firewall Rules (if needed)
 
 1. Open Control Panel → Security → Firewall
 2. Add rules for ports:
-   - 8080 (Airflow)
-   - 5432 (PostgreSQL, if external access needed)
+   - 8091 (Airflow Web UI)
+   - 8092 (Adminer DB GUI)
+   - 8123 (ClickHouse HTTP - for Power BI ODBC)
+   - 9000 (MinIO S3 API)
+   - 9001 (MinIO Console)
+   - 9002 (ClickHouse Native - optional)
+   - 5433 (PostgreSQL - if external access needed)
 
 ## Backup Strategy
 
@@ -324,6 +347,72 @@ docker-compose exec airflow-webserver airflow dags trigger cleanup_old_data
 4. **Restrict network access** via firewall
 5. **Regular updates** of base images
 
+## Power BI Connection
+
+### Complete Data Pipeline
+
+The platform uses a 6-stage architecture:
+1. **Airflow** - Orchestrates daily data collection
+2. **DBT** - Transforms data in PostgreSQL (Bronze → Silver → Gold)
+3. **Parquet Export** - Exports gold/silver tables to parquet format
+4. **MinIO** - S3-compatible data lake storage (parquet files)
+5. **ClickHouse** - Fast analytics database (loaded from MinIO)
+6. **Power BI** - Connect via ODBC to ClickHouse
+
+### Connecting Power BI to Synology
+
+**Prerequisites:**
+1. Download and install [ClickHouse ODBC Driver](https://github.com/ClickHouse/clickhouse-odbc/releases)
+2. Note your Synology's IP address (e.g., `192.168.1.201`)
+
+**Connection Steps:**
+
+1. **Power BI Desktop** → Get Data → More → ODBC
+2. **DSN Configuration**:
+   - **Server**: `192.168.1.201` (your Synology IP)
+   - **Port**: `8123`
+   - **Database**: `ahold_options`
+3. **Credentials**:
+   - **Username**: `default`
+   - **Password**: (from `.env` - CLICKHOUSE_PASSWORD)
+
+**Available Tables:**
+- `gold_gamma_exposure_weekly` - Weekly gamma exposure analysis
+- `gold_gex_positioning_trends` - GEX positioning trends
+- `gold_max_pain` - Max pain calculations
+- `gold_skew_analysis` - Volatility skew analysis
+- `gold_key_levels` - Key support/resistance levels
+- `gold_volatility_surface` - 3D volatility surface
+- `gold_options_summary_daily` - Daily options summary
+- `gold_volatility_term_structure` - Term structure
+- `gold_open_interest_flow` - OI flow analysis
+- `gold_put_call_metrics` - Put/call ratios
+- `silver_options` - All options with Greeks
+- `silver_underlying_price` - Historical stock prices
+
+**Performance Tips:**
+- Use **DirectQuery** for real-time data
+- Use **Import** mode for better dashboard performance
+- Filter by date ranges to reduce data transfer
+- ClickHouse is optimized for analytical queries
+
+### Verify Pipeline
+
+After deployment, test the complete pipeline:
+
+```bash
+# Trigger the main DAG
+docker exec ahold-options-airflow-scheduler airflow dags trigger ahold_options_daily
+
+# Check MinIO has parquet files
+# Access MinIO Console: http://synology-ip:9001
+# Login with MINIO_ROOT_USER / MINIO_ROOT_PASSWORD
+# Browse: options-data/parquet/gold/ and parquet/silver/
+
+# Check ClickHouse has data
+docker exec ahold-options-clickhouse clickhouse-client --user default --password YOUR_PASSWORD --query "SELECT database, table, total_rows FROM system.tables WHERE database = 'ahold_options'"
+```
+
 ## Support
 
 For issues specific to Synology deployment:
@@ -333,4 +422,4 @@ For issues specific to Synology deployment:
 
 ---
 
-**Last Updated**: 2024-12-07
+**Last Updated**: 2025-12-09

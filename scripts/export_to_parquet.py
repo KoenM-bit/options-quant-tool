@@ -28,11 +28,15 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.utils.db import get_db_session
+from src.utils.minio_client import get_minio_client
 from src.config import settings
 
-# Parquet export directory (mounted from host)
-PARQUET_DIR = Path("/opt/airflow/data/parquet")
+# Parquet export directory (local temp for upload to MinIO)
+PARQUET_DIR = Path("/tmp/parquet_export")
 PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+
+# Use MinIO for storage (set to False to use local filesystem only)
+USE_MINIO = os.getenv('USE_MINIO', 'true').lower() == 'true'
 
 # Tables to export (all gold layer - now including 4 new layers!)
 GOLD_TABLES = [
@@ -57,7 +61,7 @@ SILVER_TABLES = [
 
 def export_table_to_parquet(
     table_name: str,
-    schema: str = 'public_public',
+    schema: str = 'public',
     partition_by: str = None
 ) -> dict:
     """
@@ -65,7 +69,7 @@ def export_table_to_parquet(
     
     Args:
         table_name: Name of the table to export
-        schema: Database schema (default: public_public)
+        schema: Database schema (default: public)
         partition_by: Column to partition by (e.g., 'trade_date')
     
     Returns:
@@ -97,20 +101,35 @@ def export_table_to_parquet(
         size_mb = output_file.stat().st_size / (1024 * 1024)
         
         print(f"  ✅ Exported {len(df):,} rows, {size_mb:.2f} MB")
-        print(f"     File: {output_file}")
+        print(f"     Local: {output_file}")
+        
+        # Upload to MinIO if enabled
+        minio_path = None
+        if USE_MINIO:
+            try:
+                minio_client = get_minio_client()
+                # Organize by layer (gold/silver)
+                layer = 'gold' if table_name.startswith('gold_') else 'silver'
+                minio_path = f"parquet/{layer}/{table_name}.parquet"
+                minio_client.upload_file(str(output_file), minio_path)
+                print(f"     MinIO: s3://{os.getenv('MINIO_BUCKET', 'options-data')}/{minio_path}")
+            except Exception as e:
+                print(f"  ⚠️  MinIO upload failed: {e}")
+                # Don't fail the export if MinIO is unavailable
         
         return {
             'rows': len(df),
             'columns': len(df.columns),
             'size_mb': round(size_mb, 2),
-            'file': str(output_file)
+            'file': str(output_file),
+            'minio_path': minio_path
         }
 
 
 def export_partitioned_table(
     table_name: str,
     partition_column: str,
-    schema: str = 'public_public'
+    schema: str = 'public'
 ) -> dict:
     """
     Export table partitioned by a column (e.g., by date).
@@ -172,6 +191,16 @@ def export_partitioned_table(
                 total_rows += len(df)
                 total_size += size_mb
                 files.append(str(output_file))
+                
+                # Upload to MinIO if enabled
+                if USE_MINIO:
+                    try:
+                        minio_client = get_minio_client()
+                        layer = 'gold' if table_name.startswith('gold_') else 'silver'
+                        minio_path = f"parquet/{layer}/{table_name}/{table_name}_{partition_str}.parquet"
+                        minio_client.upload_file(str(output_file), minio_path)
+                    except Exception as e:
+                        print(f"  ⚠️  MinIO upload failed for {partition_str}: {e}")
         
         print(f"  ✅ Exported {total_rows:,} rows across {len(files)} files, {total_size:.2f} MB total")
         
@@ -196,7 +225,7 @@ def create_power_bi_schema_file():
             query = f"""
                 SELECT column_name, data_type 
                 FROM information_schema.columns 
-                WHERE table_schema = 'public_public' 
+                WHERE table_schema = 'public' 
                 AND table_name = '{table}'
                 ORDER BY ordinal_position
             """
@@ -267,20 +296,37 @@ def export_all_to_parquet():
     print(f"  Tables exported: {success_count}/{len(stats)}")
     print(f"  Total rows: {total_rows:,}")
     print(f"  Total size: {total_size:.2f} MB")
-    print(f"  Location: {PARQUET_DIR}")
+    if USE_MINIO:
+        print(f"  MinIO Bucket: s3://{os.getenv('MINIO_BUCKET', 'options-data')}/parquet/")
+        print(f"  MinIO Console: http://{os.getenv('MINIO_ENDPOINT', 'localhost:9000').split(':')[0]}:9001")
+    else:
+        print(f"  Local Directory: {PARQUET_DIR}")
     print()
     
-    print("🔌 POWER BI CONNECTION:")
-    print(f"  1. In Power BI Desktop, click 'Get Data' > 'Folder'")
-    print(f"  2. Browse to: {PARQUET_DIR}")
-    print(f"  3. Click 'Combine & Transform'")
-    print(f"  4. Select tables to import")
+    if USE_MINIO:
+        print("🔌 POWER BI CONNECTION (via S3):")
+        print(f"  1. In Power BI Desktop, click 'Get Data' > 'More' > 'Amazon S3'")
+        print(f"  2. S3 Endpoint: http://{os.getenv('MINIO_ENDPOINT', 'localhost:9000')}")
+        print(f"  3. Access Key ID: {os.getenv('MINIO_ROOT_USER', 'admin')}")
+        print(f"  4. Secret Access Key: (from .env MINIO_ROOT_PASSWORD)")
+        print(f"  5. Bucket: {os.getenv('MINIO_BUCKET', 'options-data')}")
+        print(f"  6. Folder Path: parquet/gold/ (or parquet/silver/)")
+    else:
+        print("🔌 POWER BI CONNECTION (via Folder):")
+        print(f"  1. In Power BI Desktop, click 'Get Data' > 'Folder'")
+        print(f"  2. Browse to: {PARQUET_DIR}")
+        print(f"  3. Click 'Combine & Transform'")
+        print(f"  4. Select tables to import")
     print()
     
     print("💡 BENEFITS:")
     print("  • 10-100x faster queries than live database")
     print("  • No database load - queries run locally")
-    print("  • Portable - can share files with team")
+    if USE_MINIO:
+        print("  • S3-compatible storage - enterprise data lake")
+        print("  • Centralized access - no file sharing needed")
+    else:
+        print("  • Portable - can share files with team")
     print("  • Version control - snapshot of data at export time")
     print("  • Offline access - no network required")
     print()

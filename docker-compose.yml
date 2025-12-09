@@ -39,6 +39,20 @@ x-airflow-common:
     # Logging
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     
+    # MinIO S3-compatible storage
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
+    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-miniopassword123}
+    MINIO_BUCKET: ${MINIO_BUCKET:-options-data}
+    MINIO_SECURE: ${MINIO_SECURE:-false}
+    
+    # ClickHouse analytics database
+    CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-clickhouse}
+    CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+    CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ahold_options}
+    CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+    CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+    
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
@@ -114,6 +128,8 @@ services:
         /entrypoint airflow version
         echo "Initializing application database tables..."
         python /opt/airflow/scripts/init_db.py
+        echo "Initializing MinIO storage..."
+        python /opt/airflow/scripts/init_minio.py
         echo "✅ Initialization complete!"
     environment:
       <<: *airflow-common-env
@@ -152,5 +168,59 @@ services:
     networks:
       - default
 
+  # MinIO - S3-compatible object storage for data lake
+  minio:
+    image: minio/minio:latest
+    container_name: ahold-options-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Web Console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniopassword123}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - default
+
+  # ClickHouse - Analytics Database
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: ahold-options-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9002:9000"  # Native client protocol (external port 9002 to avoid MinIO conflict)
+    expose:
+      - "9000"  # Internal native protocol
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ahold_options}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./scripts/clickhouse-init:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - default
+
 volumes:
   postgres-db-volume:
+  minio-data:
+  clickhouse-data:
