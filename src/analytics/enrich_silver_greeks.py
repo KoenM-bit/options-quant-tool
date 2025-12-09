@@ -124,15 +124,15 @@ def enrich_silver_with_greeks(
                 try:
                     stats['total_processed'] += 1
                     
-                    # Composite key fields (no id column anymore)
-                    ticker_val = row[0]
-                    strike = float(row[1])
-                    expiry_date = row[2]
-                    trade_date = row[3]
-                    option_type = row[4]
-                    mid_price = float(row[6])
-                    underlying_price = float(row[7])
-                    days_to_expiry = int(row[8])
+                    # Composite key fields (matches SELECT order)
+                    ticker_val = row[0]      # ticker
+                    strike = float(row[1])   # strike
+                    expiry_date = row[2]     # expiry_date
+                    trade_date = row[3]      # trade_date
+                    option_type = row[4]     # option_type
+                    mid_price = float(row[5])          # mid_price
+                    underlying_price = float(row[6])   # underlying_price
+                    days_to_expiry = int(row[7])       # days_to_expiry
                     
                     # Convert days to years
                     T = days_to_expiry / 365.0
