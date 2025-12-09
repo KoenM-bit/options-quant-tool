@@ -52,7 +52,6 @@ dbt_modules/
 target/
 dbt_packages/
 logs/
-profiles.yml
 
 # Database
 *.db
