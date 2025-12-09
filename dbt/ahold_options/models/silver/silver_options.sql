@@ -11,38 +11,36 @@ Cleans options data and calculates derived metrics.
 
 WITH source_data AS (
     SELECT
-        ticker,
-        isin,
-        option_type,
-        strike,
-        expiry_date,
+        o.ticker,
+        o.isin,
+        o.option_type,
+        o.strike,
+        o.expiry_date,
         -- Derive trade_date: Weekend scrapes contain Friday's data
         CASE 
-            WHEN EXTRACT(DOW FROM scraped_at) = 6 THEN DATE(scraped_at) - INTERVAL '1 day'  -- Saturday scrape = Friday data
-            WHEN EXTRACT(DOW FROM scraped_at) = 0 THEN DATE(scraped_at) - INTERVAL '2 days' -- Sunday scrape = Friday data
-            ELSE DATE(scraped_at) - INTERVAL '1 day'  -- Weekday evening scrape = previous day data
+            WHEN EXTRACT(DOW FROM o.scraped_at) = 6 THEN DATE(o.scraped_at) - INTERVAL '1 day'  -- Saturday scrape = Friday data
+            WHEN EXTRACT(DOW FROM o.scraped_at) = 0 THEN DATE(o.scraped_at) - INTERVAL '2 days' -- Sunday scrape = Friday data
+            ELSE DATE(o.scraped_at) - INTERVAL '1 day'  -- Weekday evening scrape = previous day data
         END AS trade_date,
-        bid,
-        ask,
-        laatste AS last_price,
-        volume,
-        open_interest,
-        underlying_price,
-        -- Greeks removed - calculated in silver_options_with_greeks Python model
-        -- delta,
-        -- gamma,
-        -- theta,
-        -- vega,
-        -- implied_volatility,
-        scraped_at,
-        id AS source_id
-    FROM {{ source('bronze', 'bronze_fd_options') }}
+        o.bid,
+        o.ask,
+        o.laatste AS last_price,
+        o.volume,
+        o.open_interest,
+        -- Get underlying price from overview table (not from options table where it's NULL)
+        ov.koers AS underlying_price,
+        o.scraped_at,
+        o.id AS source_id
+    FROM {{ source('bronze', 'bronze_fd_options') }} o
+    LEFT JOIN {{ source('bronze', 'bronze_fd_overview') }} ov
+        ON o.ticker = ov.ticker
+        AND DATE(o.scraped_at) = DATE(ov.scraped_at)
     WHERE 
-        expiry_date IS NOT NULL
-        AND strike IS NOT NULL
-        AND strike > 0
+        o.expiry_date IS NOT NULL
+        AND o.strike IS NOT NULL
+        AND o.strike > 0
         {% if is_incremental() %}
-        AND scraped_at > COALESCE((SELECT MAX(created_at) FROM {{ this }}), '1900-01-01'::timestamp)
+        AND o.scraped_at > COALESCE((SELECT MAX(created_at) FROM {{ this }}), '1900-01-01'::timestamp)
         {% endif %}
 ),
 
