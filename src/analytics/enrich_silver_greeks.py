@@ -84,7 +84,6 @@ def enrich_silver_with_greeks(
         # Silver has no implied_volatility column yet, so we check all records
         query_sql = text("""
             SELECT 
-                id,
                 ticker,
                 strike,
                 expiry_date,
@@ -125,10 +124,12 @@ def enrich_silver_with_greeks(
                 try:
                     stats['total_processed'] += 1
                     
-                    option_key = row[0]
-                    trade_date = row[4]
-                    strike = float(row[2])  # Index 2, not 1
-                    option_type = row[5]
+                    # Composite key fields (no id column anymore)
+                    ticker_val = row[0]
+                    strike = float(row[1])
+                    expiry_date = row[2]
+                    trade_date = row[3]
+                    option_type = row[4]
                     mid_price = float(row[6])
                     underlying_price = float(row[7])
                     days_to_expiry = int(row[8])
@@ -188,11 +189,19 @@ def enrich_silver_with_greeks(
                             greeks_valid = :greeks_valid,
                             greeks_status = :greeks_status,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :option_id
+                        WHERE ticker = :ticker
+                          AND option_type = :option_type
+                          AND strike = :strike
+                          AND expiry_date = :expiry_date
+                          AND trade_date = :trade_date
                     """)
 
                     session.execute(update_sql, {
-                        'option_id': option_key,
+                        'ticker': ticker_val,
+                        'option_type': option_type,
+                        'strike': strike,
+                        'expiry_date': expiry_date,
+                        'trade_date': trade_date,
                         'iv': metrics.get('implied_volatility'),
                         'delta': metrics.get('delta'),
                         'gamma': metrics.get('gamma'),

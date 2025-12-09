@@ -16,11 +16,9 @@ class SilverUnderlyingPrice(Base, TimestampMixin):
     """
     __tablename__ = "silver_underlying_price"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    
-    # Identifiers
-    ticker = Column(String(20), nullable=False, index=True)
-    trade_date = Column(Date, nullable=False, index=True)
+    # Identifiers (composite primary key - managed by DBT)
+    ticker = Column(String(20), nullable=False, primary_key=True)
+    trade_date = Column(Date, nullable=False, primary_key=True)
     
     # Price data
     open_price = Column(Numeric(10, 2), nullable=True)
@@ -51,15 +49,13 @@ class SilverOption(Base, TimestampMixin):
     """
     __tablename__ = "silver_options"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    
-    # Identifiers
-    ticker = Column(String(20), nullable=False, index=True)
+    # Identifiers (composite primary key - managed by DBT)
+    ticker = Column(String(20), nullable=False, primary_key=True)
     isin = Column(String(20), nullable=True, index=True)
-    option_type = Column(String(10), nullable=False, index=True)
-    strike = Column(Numeric(10, 2), nullable=False)
-    expiry_date = Column(Date, nullable=False, index=True)
-    trade_date = Column(Date, nullable=False, index=True)
+    option_type = Column(String(10), nullable=False, primary_key=True)
+    strike = Column(Numeric(10, 2), nullable=False, primary_key=True)
+    expiry_date = Column(Date, nullable=False, primary_key=True)
+    trade_date = Column(Date, nullable=False, primary_key=True)
     
     # Price data
     bid = Column(Numeric(10, 4), nullable=True)
