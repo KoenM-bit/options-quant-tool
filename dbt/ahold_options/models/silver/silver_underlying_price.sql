@@ -6,7 +6,7 @@ Calculates daily returns and validates data quality.
 
 {{ config(
     materialized='incremental',
-    unique_key='ticker_date_key',
+    unique_key=['ticker', 'trade_date'],
     tags=['silver', 'underlying']
 ) }}
 
@@ -83,6 +83,5 @@ calculated AS (
 )
 
 SELECT
-    ticker || '_' || trade_date AS ticker_date_key,
     *
 FROM calculated

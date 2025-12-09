@@ -5,7 +5,7 @@ Cleans options data and calculates derived metrics.
 
 {{ config(
     materialized='incremental',
-    unique_key='option_key',
+    unique_key=['ticker', 'option_type', 'strike', 'expiry_date', 'trade_date'],
     tags=['silver', 'options']
 ) }}
 
@@ -168,6 +168,5 @@ with_time_value AS (
 )
 
 SELECT
-    ticker || '_' || option_type || '_' || strike || '_' || expiry_date || '_' || trade_date AS option_key,
     *
 FROM with_time_value
