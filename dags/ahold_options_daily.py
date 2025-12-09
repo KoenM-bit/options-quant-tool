@@ -294,20 +294,66 @@ failure_notification_task = PythonOperator(
 )
 
 # DBT transformations - Silver layer only (Bronze → Silver deduplication)
+def run_dbt_silver(**context):
+    """Run DBT silver models with proper logging."""
+    import subprocess
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Starting DBT Silver transformation...")
+    
+    result = subprocess.run(
+        ['dbt', 'run', '--models', 'tag:silver', '--profiles-dir', '/opt/airflow/dbt'],
+        cwd='/opt/airflow/dbt/ahold_options',
+        capture_output=True,
+        text=True
+    )
+    
+    logger.info(f"DBT stdout:\n{result.stdout}")
+    if result.stderr:
+        logger.warning(f"DBT stderr:\n{result.stderr}")
+    
+    if result.returncode != 0:
+        raise Exception(f"DBT failed with return code {result.returncode}")
+    
+    logger.info("✅ DBT Silver transformation completed successfully")
+    return result.returncode
+
 run_dbt_silver_task = PythonOperator(
     task_id='run_dbt_silver',
-    python_callable=lambda: os.system(
-        'cd /opt/airflow/dbt/ahold_options && dbt run --models tag:silver --profiles-dir /opt/airflow/dbt'
-    ),
+    python_callable=run_dbt_silver,
     dag=dag,
 )
 
 # DBT Gold layer - run AFTER Greeks enrichment
+def run_dbt_gold(**context):
+    """Run DBT gold models with proper logging."""
+    import subprocess
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Starting DBT Gold transformation...")
+    
+    result = subprocess.run(
+        ['dbt', 'run', '--models', 'tag:gold', '--profiles-dir', '/opt/airflow/dbt'],
+        cwd='/opt/airflow/dbt/ahold_options',
+        capture_output=True,
+        text=True
+    )
+    
+    logger.info(f"DBT stdout:\n{result.stdout}")
+    if result.stderr:
+        logger.warning(f"DBT stderr:\n{result.stderr}")
+    
+    if result.returncode != 0:
+        raise Exception(f"DBT failed with return code {result.returncode}")
+    
+    logger.info("✅ DBT Gold transformation completed successfully")
+    return result.returncode
+
 run_dbt_gold_task = PythonOperator(
     task_id='run_dbt_gold',
-    python_callable=lambda: os.system(
-        'cd /opt/airflow/dbt/ahold_options && dbt run --models tag:gold --profiles-dir /opt/airflow/dbt'
-    ),
+    python_callable=run_dbt_gold,
     dag=dag,
 )
 
