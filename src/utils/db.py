@@ -97,11 +97,13 @@ def init_db():
     """
     Initialize database tables.
     Should be called once during setup.
+    Note: Only creates Bronze tables. Silver and Gold are managed by DBT.
     """
     from src.models.base import Base
-    from src.models import bronze, silver, gold
+    from src.models import bronze
+    # Don't import silver/gold - DBT manages those schemas
     
-    logger.info("Creating database tables...")
+    logger.info("Creating database tables (Bronze layer only)...")
     Base.metadata.create_all(bind=engine)
     logger.info("✅ Database tables created successfully")
 
