@@ -1,116 +1,106 @@
+# Docker Compose for Synology/Portainer Deployment
+# This is a production-ready configuration without local volume mounts
+# All code is baked into the Docker image: ghcr.io/koenm-bit/options-quant-tool:latest
+
+version: '3.8'
+
 x-airflow-common:
   &airflow-common
-  build: .
+  image: ghcr.io/koenm-bit/options-quant-tool:latest
   environment:
     &airflow-common-env
+    # Airflow Core Settings
     AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    
+    # Webserver Settings
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    
+    # Scheduler Settings
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    
+    # Database Migration (use new variable name)
     _AIRFLOW_DB_MIGRATE: 'true'
+    
+    # Admin User Creation
     _AIRFLOW_WWW_USER_CREATE: 'true'
     _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
     _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
     
-    # Application settings
-    ENVIRONMENT: ${ENVIRONMENT:-local}
+    # Application Settings
+    ENVIRONMENT: ${ENVIRONMENT:-production}
     POSTGRES_HOST: postgres
     POSTGRES_PORT: 5432
     POSTGRES_DB: ${POSTGRES_DB}
     POSTGRES_USER: ${POSTGRES_USER}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     
-    # DBT
+    # DBT Configuration
     DBT_PROFILES_DIR: /opt/airflow/dbt
     DBT_PROJECT_DIR: /opt/airflow/dbt/ahold_options
     
-    # Scraper settings
+    # Scraper Settings
     SCRAPER_USER_AGENT: ${SCRAPER_USER_AGENT}
     SCRAPER_TIMEOUT: ${SCRAPER_TIMEOUT:-30}
     SCRAPER_RETRY_ATTEMPTS: ${SCRAPER_RETRY_ATTEMPTS:-3}
     
-    # Ahold settings
+    # Ahold Specific Settings
     AHOLD_TICKER: ${AHOLD_TICKER:-AD.AS}
     AHOLD_SYMBOL_CODE: ${AHOLD_SYMBOL_CODE:-AEX.AH/O}
     
     # Logging
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     
-  volumes:
-    - ./dags:/opt/airflow/dags
-    - ./src:/opt/airflow/src
-    - ./dbt:/opt/airflow/dbt
-    - ./logs:/opt/airflow/logs
-    - ./plugins:/opt/airflow/plugins
-    - ./data:/opt/airflow/data
-    - ./scripts:/opt/airflow/scripts
+  # Run as non-root user for security
   user: "${AIRFLOW_UID:-50000}:0"
+  
+  # Persistent logs only (code is in the image)
+  volumes:
+    - airflow-logs:/opt/airflow/logs
+    - airflow-data:/opt/airflow/data
+    
   depends_on:
     &airflow-common-depends-on
     postgres:
       condition: service_healthy
 
 services:
+  # PostgreSQL Database
   postgres:
     image: postgres:15
+    container_name: ahold-options-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # Additional PostgreSQL performance tuning for Synology
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=en_US.UTF-8"
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
       interval: 10s
       retries: 5
-      start_period: 5s
+      start_period: 10s
+      timeout: 5s
     restart: unless-stopped
+    networks:
+      - ahold-network
 
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - "8081:8080"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
+  # Airflow Initialization Service
   airflow-init:
     <<: *airflow-common
+    container_name: ahold-options-airflow-init
     entrypoint: /bin/bash
     command:
       - -c
       - |
-        mkdir -p /sources/logs /sources/dags /sources/plugins
-        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+        echo "Initializing Airflow database..."
         /entrypoint airflow version
         echo "Initializing application database tables..."
         python /opt/airflow/scripts/init_db.py
@@ -121,12 +111,54 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
-    user: "0:0"
-    volumes:
-      - .:/sources
+    user: "${AIRFLOW_UID:-50000}:0"
+    networks:
+      - ahold-network
 
+  # Airflow Webserver
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: ahold-options-airflow-webserver
+    command: webserver
+    ports:
+      - "8091:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - ahold-network
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: ahold-options-airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - ahold-network
+
+  # Airflow CLI (for debugging, optional)
   airflow-cli:
     <<: *airflow-common
+    container_name: ahold-options-airflow-cli
     profiles:
       - debug
     environment:
@@ -136,21 +168,32 @@ services:
       - bash
       - -c
       - airflow
+    networks:
+      - ahold-network
 
-  # Database GUI - Adminer (lightweight phpMyAdmin alternative for PostgreSQL)
+  # Database GUI - Adminer
   adminer:
     image: adminer:latest
     container_name: ahold-options-adminer
     restart: unless-stopped
     ports:
-      - "8082:8080"
+      - "8092:8080"
     environment:
       ADMINER_DEFAULT_SERVER: postgres
       ADMINER_DESIGN: nette
     depends_on:
       - postgres
     networks:
-      - default
+      - ahold-network
+
+networks:
+  ahold-network:
+    driver: bridge
 
 volumes:
   postgres-db-volume:
+    driver: local
+  airflow-logs:
+    driver: local
+  airflow-data:
+    driver: local

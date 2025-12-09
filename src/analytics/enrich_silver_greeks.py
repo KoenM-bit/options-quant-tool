@@ -84,7 +84,7 @@ def enrich_silver_with_greeks(
         # Silver has no implied_volatility column yet, so we check all records
         query_sql = text("""
             SELECT 
-                option_key,
+                id,
                 ticker,
                 strike,
                 expiry_date,
@@ -188,11 +188,11 @@ def enrich_silver_with_greeks(
                             greeks_valid = :greeks_valid,
                             greeks_status = :greeks_status,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE option_key = :option_key
+                        WHERE id = :option_id
                     """)
 
                     session.execute(update_sql, {
-                        'option_key': option_key,
+                        'option_id': option_key,
                         'iv': metrics.get('implied_volatility'),
                         'delta': metrics.get('delta'),
                         'gamma': metrics.get('gamma'),
