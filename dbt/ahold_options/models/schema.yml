@@ -52,3 +52,51 @@ sources:
             description: Expiration date
             tests:
               - not_null
+
+      - name: bronze_bd_options
+        description: Raw Beursduivel options chain data (primary source for bid/ask)
+        columns:
+          - name: id
+            description: Primary key
+            tests:
+              - unique
+              - not_null
+          - name: ticker
+            description: Stock ticker symbol
+            tests:
+              - not_null
+          - name: trade_date
+            description: Trading day this data represents
+            tests:
+              - not_null
+          - name: option_type
+            description: Call or Put
+            tests:
+              - accepted_values:
+                  values: ['Call', 'Put']
+          - name: strike
+            description: Strike price
+            tests:
+              - not_null
+          - name: expiry_date
+            description: Expiration date
+            tests:
+              - not_null
+
+      - name: bronze_bd_underlying
+        description: Raw Beursduivel underlying stock data (synchronized with options)
+        columns:
+          - name: ticker
+            description: Stock ticker symbol
+            tests:
+              - not_null
+          - name: trade_date
+            description: Trading day this data represents
+            tests:
+              - not_null
+          - name: last_price
+            description: Last traded price
+          - name: bid
+            description: Bid price
+          - name: ask
+            description: Ask price

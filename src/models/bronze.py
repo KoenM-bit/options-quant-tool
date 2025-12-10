@@ -22,6 +22,7 @@ class BronzeFDOverview(Base, TimestampMixin):
     # Identifiers
     ticker = Column(String(20), nullable=False, index=True)
     symbol_code = Column(String(50), nullable=False)
+    trade_date = Column(Date, nullable=False, index=True, comment="Trading day this data represents (day before scrape)")
     scraped_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     source_url = Column(Text, nullable=True)
     
@@ -69,6 +70,7 @@ class BronzeFDOptions(Base, TimestampMixin):
     # Identifiers
     ticker = Column(String(20), nullable=False, index=True)
     symbol_code = Column(String(50), nullable=False)
+    trade_date = Column(Date, nullable=False, index=True, comment="Trading day this data represents (day before scrape)")
     scraped_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     source_url = Column(Text, nullable=True)
     

@@ -834,8 +834,10 @@ def calculate_option_metrics(
         }
     
     # QUALITY CHECK 3: IV must be in reasonable range
-    if iv < 0.05 or iv > 2.0:  # 5% to 200%
-        logger.debug(f"IV out of acceptable range: {iv:.2%} (must be 5%-200%)")
+    # For deep ITM options, allow higher IV (they have little time value, so IV can be extreme)
+    max_iv = 5.0 if is_deep_itm else 2.0  # 500% for deep ITM, 200% otherwise
+    if iv < 0.05 or iv > max_iv:
+        logger.debug(f"IV out of acceptable range: {iv:.2%} (must be 5%-{max_iv*100:.0f}%, deep_itm={is_deep_itm})")
         return {
             'implied_volatility': None,
             'delta': None,

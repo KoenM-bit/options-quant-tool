@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 def get_underlying_price_from_silver(ticker: str, trade_date) -> Optional[float]:
     """Get underlying price from Silver layer for a given trade date."""
     with get_db_session() as session:
-        # Query silver_options for underlying price on this trade date
+        # Query silver_bd_options_enriched for underlying price on this trade date
         result = session.execute(
             text("""
                 SELECT underlying_price
-                FROM silver_options
+                FROM silver_bd_options_enriched
                 WHERE ticker = :ticker
                   AND trade_date = :trade_date
                   AND underlying_price IS NOT NULL
@@ -92,7 +92,7 @@ def enrich_silver_with_greeks(
                 mid_price,
                 underlying_price,
                 days_to_expiry
-            FROM silver_options
+            FROM silver_bd_options_enriched
             WHERE ticker = :ticker
               AND mid_price IS NOT NULL
               AND mid_price > 0
@@ -177,7 +177,7 @@ def enrich_silver_with_greeks(
 
                     # Update Silver with calculated Greeks and metadata
                     update_sql = text("""
-                        UPDATE silver_options
+                        UPDATE silver_bd_options_enriched
                         SET 
                             implied_volatility = :iv,
                             delta = :delta,
@@ -185,10 +185,7 @@ def enrich_silver_with_greeks(
                             vega = :vega,
                             theta = :theta,
                             rho = :rho,
-                            risk_free_rate_used = :rf,
-                            greeks_valid = :greeks_valid,
-                            greeks_status = :greeks_status,
-                            updated_at = CURRENT_TIMESTAMP
+                            transformed_at = CURRENT_TIMESTAMP
                         WHERE ticker = :ticker
                           AND option_type = :option_type
                           AND strike = :strike
@@ -208,9 +205,6 @@ def enrich_silver_with_greeks(
                         'vega': metrics.get('vega'),
                         'theta': metrics.get('theta'),
                         'rho': metrics.get('rho'),
-                        'rf': actual_rate,
-                        'greeks_valid': has_greeks,
-                        'greeks_status': 'ok' if has_greeks else 'rejected',
                     })
 
                     if has_greeks:

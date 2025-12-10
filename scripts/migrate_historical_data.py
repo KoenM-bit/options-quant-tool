@@ -162,7 +162,7 @@ class HistoricalDataMigration:
         }
         
     def transform_to_bronze_options(self, mysql_row: Dict[str, Any], underlying_price: float = None) -> Dict[str, Any]:
-        """Transform MySQL fd_option_contracts row to Bronze options format"""
+        """Transform MySQL fd_option_contracts row to Bronze options format - NEW SCHEMA (no Greeks in bronze)"""
         
         return {
             'ticker': mysql_row['ticker'],  # AD.AS
@@ -179,11 +179,6 @@ class HistoricalDataMigration:
             'ask': float(mysql_row['ask']) if mysql_row.get('ask') else None,
             'volume': int(mysql_row['volume']) if mysql_row.get('volume') else None,
             'open_interest': int(mysql_row['open_interest']) if mysql_row.get('open_interest') else None,
-            'delta': None,  # Greeks not in MySQL data
-            'gamma': None,
-            'theta': None,
-            'vega': None,
-            'implied_volatility': None,
             'underlying_price': underlying_price,  # Get from overview data
         }
         
@@ -225,12 +220,10 @@ class HistoricalDataMigration:
         query = """
         INSERT INTO bronze_fd_options 
         (created_at, updated_at, ticker, symbol_code, scraped_at, source_url, option_type, 
-         expiry_date, strike, naam, isin, laatste, bid, ask, volume, open_interest, 
-         delta, gamma, theta, vega, implied_volatility, underlying_price)
+         expiry_date, strike, naam, isin, laatste, bid, ask, volume, open_interest, underlying_price)
         VALUES (NOW(), NOW(), %(ticker)s, %(symbol_code)s, %(scraped_at)s, %(source_url)s, 
                 %(option_type)s, %(expiry_date)s, %(strike)s, %(naam)s, %(isin)s, %(laatste)s, 
-                %(bid)s, %(ask)s, %(volume)s, %(open_interest)s, %(delta)s, %(gamma)s, 
-                %(theta)s, %(vega)s, %(implied_volatility)s, %(underlying_price)s)
+                %(bid)s, %(ask)s, %(volume)s, %(open_interest)s, %(underlying_price)s)
         """
         
         execute_batch(cursor, query, data, page_size=100)

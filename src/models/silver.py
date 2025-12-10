@@ -111,3 +111,69 @@ class SilverOption(Base, TimestampMixin):
             f"<SilverOption(ticker={self.ticker}, type={self.option_type}, "
             f"strike={self.strike}, expiry={self.expiry_date})>"
         )
+
+
+class SilverOptionsChain(Base):
+    """
+    Silver layer: Options chain with merged BD (pricing) + FD (metrics) data.
+    High-quality Greeks calculation with synchronized underlying price.
+    """
+    
+    __tablename__ = "silver_options_chain"
+    
+    # A) Identity / time / lineage
+    ticker = Column(String, primary_key=True, nullable=False)
+    trade_date = Column(Date, primary_key=True, nullable=False, comment="Trading day this data represents")
+    symbol_code = Column(String)
+    as_of_ts = Column(DateTime, nullable=False, comment="Timestamp of data snapshot")
+    as_of_date = Column(Date, nullable=False, comment="Date of data snapshot")
+    source = Column(String, comment="Data source (e.g., 'beursduivel_primary_fd_secondary')")
+    source_url = Column(String)
+    scrape_run_id = Column(String)
+    ingested_at = Column(DateTime)
+    
+    # B) Contract fields
+    option_type = Column(String, primary_key=True, nullable=False, comment="Call or Put")
+    expiry_date = Column(Date, primary_key=True, nullable=False)
+    strike = Column(Float, primary_key=True, nullable=False)
+    contract_key = Column(String, nullable=False, comment="ticker|expiry|strike|type")
+    
+    # C) Quote fields
+    last_price = Column(Float)
+    bid = Column(Float)
+    ask = Column(Float)
+    mid_price = Column(Float, comment="(bid+ask)/2")
+    spread_abs = Column(Float, comment="ask - bid")
+    spread_pct = Column(Float, comment="spread / mid_price")
+    volume = Column(Integer, comment="Intraday volume")
+    open_interest = Column(Integer, comment="Total open contracts")
+    underlying_price = Column(Float, comment="Underlying stock price (synchronized)")
+    
+    # D) Quality helpers
+    is_valid_quote = Column(Boolean)
+    has_bd_data = Column(Boolean, comment="Has Beursduivel pricing")
+    has_fd_data = Column(Boolean, comment="Has FD metrics")
+    row_hash = Column(String)
+    
+    # E) Greeks
+    iv = Column(Float, comment="Implied volatility (annual)")
+    delta = Column(Float)
+    gamma = Column(Float)
+    vega = Column(Float)
+    theta = Column(Float)
+    rho = Column(Float)
+    
+    # F) Derived fields
+    dte = Column(Integer, comment="Days to expiry")
+    moneyness = Column(Float, comment="S/K ratio")
+    is_itm = Column(Boolean, comment="In the money flag")
+    
+    # Metadata
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
+    
+    def __repr__(self):
+        return (
+            f"<SilverOptionsChain(ticker={self.ticker}, type={self.option_type}, "
+            f"strike={self.strike}, expiry={self.expiry_date}, iv={self.iv})>"
+        )
