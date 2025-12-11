@@ -82,15 +82,16 @@ def check_bronze_data_quality(**context):
     Checks both BD and FD data for today's trade date.
     """
     import logging
-    from datetime import date
+    from datetime import datetime
     from src.utils.db import get_db_session
     from sqlalchemy import text
     
     logger = logging.getLogger(__name__)
-    execution_date = context['execution_date']
-    trade_date = execution_date.date()
     
-    logger.info(f"Checking bronze data quality for {trade_date}")
+    # Use ACTUAL date (today) for quality check
+    trade_date = datetime.now().date()
+    
+    logger.info(f"Checking bronze data quality for {trade_date} (today)")
     
     with get_db_session() as session:
         # Check BD data
@@ -273,10 +274,11 @@ def export_to_minio(**context):
     from datetime import date
     logger = logging.getLogger(__name__)
     
-    execution_date = context['execution_date']
-    trade_date = execution_date.strftime('%Y-%m-%d')
+    # Use ACTUAL date (today) for export
+    from datetime import datetime
+    trade_date = datetime.now().strftime('%Y-%m-%d')
     
-    logger.info(f"Exporting data to MinIO for {trade_date}")
+    logger.info(f"Exporting data to MinIO for {trade_date} (today)")
     
     result = subprocess.run(
         ['python', '/opt/airflow/scripts/export_parquet_simple.py', 
@@ -441,19 +443,23 @@ def scrape_beursduivel(**context):
     from src.utils.db import get_db_session
     from src.models.bronze_bd import BronzeBDOptions
     from src.models.bronze_bd_underlying import BronzeBDUnderlying
+    from datetime import datetime
     
     logger = logging.getLogger(__name__)
-    execution_date = context['execution_date']
-    trade_date = execution_date.date()
+    
+    # Use ACTUAL run date (today), not execution_date (yesterday)
+    # BD data is live scraped data for TODAY
+    today = datetime.now().date()
+    trade_date = today
     
     # Skip BD scraping on Saturday (only FD runs on Saturday)
-    if execution_date.weekday() == 5:  # 5=Saturday
+    if today.weekday() == 5:  # 5=Saturday
         logger.info(f"⏭️  Skipping BD scrape on Saturday (only FD runs today)")
         context['ti'].xcom_push(key='bd_contracts', value=0)
         context['ti'].xcom_push(key='bd_underlying_price', value=None)
         return {'contracts': 0, 'underlying': None, 'skipped': True}
     
-    logger.info(f"🚀 Scraping Beursduivel for {trade_date}")
+    logger.info(f"🚀 Scraping Beursduivel for {trade_date} (actual date)")
     
     try:
         # Scrape data (fetch_live=True gets all strikes with live prices)
@@ -535,17 +541,20 @@ def scrape_fd(**context):
     from src.scrapers.fd_options_scraper import scrape_fd_options
     from src.utils.db import get_db_session
     from src.models.bronze import BronzeFDOverview, BronzeFDOptions
+    from datetime import datetime
     
     logger = logging.getLogger(__name__)
-    execution_date = context['execution_date']
+    
+    # Use ACTUAL run date (today) for weekday check
+    today = datetime.now().date()
     
     # Skip FD scraping on Monday (FD publishes with 1-day delay, no Saturday data exists)
-    if execution_date.weekday() == 0:  # 0=Monday
+    if today.weekday() == 0:  # 0=Monday
         logger.info(f"⏭️  Skipping FD scrape on Monday (no new data, FD publishes Tue-Sat)")
         context['ti'].xcom_push(key='fd_contracts', value=0)
         return {'contracts': 0, 'skipped': True}
     
-    logger.info(f"🚀 Scraping FD.nl for execution_date={execution_date.date()}")
+    logger.info(f"🚀 Scraping FD.nl for today={today}")
     
     try:
         # Scrape overview first to get the peildatum (actual trading day)
