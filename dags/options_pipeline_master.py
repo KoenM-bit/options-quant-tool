@@ -45,7 +45,7 @@ dag = DAG(
     'options_pipeline_master',
     default_args=default_args,
     description='Master orchestration for complete options data pipeline',
-    schedule_interval='30 17 * * 1-6',  # 17:30 CET (Amsterdam time), Mon-Sat (Sat for Friday FD data)
+    schedule_interval='30 16 * * 1-6',  # 16:30 UTC = 17:30 CET (Amsterdam winter time), Mon-Sat
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['ahold', 'options', 'pipeline', 'orchestration', 'master'],
