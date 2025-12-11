@@ -209,10 +209,24 @@ def export_silver(trade_date: date, ticker: str) -> int:
 
 
 def export_gold(trade_date: date, ticker: str) -> int:
-    """Export gold_daily_summary_test for a specific date."""
+    """Export gold_daily_summary_test for a specific date (skip if table doesn't exist)."""
     logger.info(f"Exporting gold data for {trade_date}, ticker={ticker}")
     
     with get_db_session() as session:
+        # Check if table exists first
+        check_query = text("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'gold_daily_summary_test'
+            )
+        """)
+        table_exists = session.execute(check_query).scalar()
+        
+        if not table_exists:
+            logger.warning("⚠️  gold_daily_summary_test table doesn't exist, skipping gold export")
+            return 0
+        
         query = text("""
             SELECT *
             FROM gold_daily_summary_test
