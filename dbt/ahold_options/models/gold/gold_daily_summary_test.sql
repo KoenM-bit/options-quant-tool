@@ -7,7 +7,8 @@ This is a TEST model to validate the complete data flow with BD + FD merged data
 
 {{ config(
     materialized='table',
-    tags=['gold', 'summary', 'test']
+    tags=['gold', 'summary', 'test'],
+    enabled=false
 ) }}
 
 WITH daily_summary AS (

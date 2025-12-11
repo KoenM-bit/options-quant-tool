@@ -101,6 +101,8 @@ def init_db():
     """
     from src.models.base import Base
     from src.models import bronze
+    from src.models import bronze_bd
+    from src.models import bronze_bd_underlying
     # Don't import silver/gold - DBT manages those schemas
     
     logger.info("Creating database tables (Bronze layer only)...")
