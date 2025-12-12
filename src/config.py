@@ -32,13 +32,43 @@ class Settings(BaseSettings):
     scraper_retry_attempts: int = Field(default=3, env="SCRAPER_RETRY_ATTEMPTS")
     scraper_retry_delay: int = Field(default=5, env="SCRAPER_RETRY_DELAY")
     
-    # Ahold specific
+    # Ticker Configuration (Multi-Ticker Support)
+    # Format: JSON list of dicts with ticker, symbol_code (FD), and bd_url (Beursduivel)
+    # Example:
+    # [
+    #   {
+    #     "ticker": "AD.AS",
+    #     "symbol_code": "AEX.AH/O",
+    #     "bd_url": "https://www.beursgorilla.nl/Aandeel-Koers/1/Ahold-Delhaize/Opties.aspx"
+    #   },
+    #   {
+    #     "ticker": "MT.AS", 
+    #     "symbol_code": "AEX.MT/O",
+    #     "bd_url": "https://www.beursgorilla.nl/Aandeel-Koers/11895/ArcelorMittal/Opties.aspx"
+    #   }
+    # ]
+    tickers_config: str = Field(
+        default='[{"ticker": "AD.AS", "symbol_code": "AEX.AH/O", "bd_url": "https://www.beursgorilla.nl/Aandeel-Koers/1/Ahold-Delhaize/Opties.aspx"}]',
+        env="TICKERS_CONFIG"
+    )
+    
+    # Legacy fields (backwards compatibility)
     ahold_ticker: str = Field(default="AD.AS", env="AHOLD_TICKER")
     ahold_symbol_code: str = Field(default="AEX.AH/O", env="AHOLD_SYMBOL_CODE")
     ahold_fd_base_url: str = Field(
         default="https://beurs.fd.nl/derivaten/opties/",
         env="AHOLD_FD_BASE_URL"
     )
+    
+    @property
+    def tickers(self) -> list[dict]:
+        """Parse tickers configuration from JSON string."""
+        import json
+        try:
+            return json.loads(self.tickers_config)
+        except json.JSONDecodeError:
+            # Fallback to legacy single ticker
+            return [{"ticker": self.ahold_ticker, "symbol_code": self.ahold_symbol_code}]
     
     # DBT
     dbt_project_dir: str = Field(default="/opt/airflow/dbt/ahold_options", env="DBT_PROJECT_DIR")

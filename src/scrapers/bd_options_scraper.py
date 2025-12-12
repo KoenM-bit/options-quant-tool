@@ -19,7 +19,8 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 BASE = "https://www.beursduivel.be"
-AHOLD_URL = f"{BASE}/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"
+# Legacy default - can be overridden via url parameter
+DEFAULT_AHOLD_URL = f"{BASE}/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 }
@@ -124,13 +125,14 @@ def parse_expiry_date(expiry_text: str) -> Optional[Tuple[str, str]]:
         return None
 
 
-def fetch_option_overview(ticker: str = "AD.AS", expand_all: bool = True) -> Tuple[List[Dict], Optional[Dict]]:
+def fetch_option_overview(ticker: str = "AD.AS", url: str = None, expand_all: bool = True) -> Tuple[List[Dict], Optional[Dict]]:
     """
     Fetch all options from Beursduivel overview page along with underlying stock data.
     Returns list of options with bid/ask from overview table + underlying price data.
     
     Args:
         ticker: Stock ticker (default: AD.AS)
+        url: Beursduivel options page URL (if None, uses DEFAULT_AHOLD_URL)
         expand_all: If True, click "Show More" buttons to get all strikes (recommended)
     
     Returns:
@@ -138,14 +140,17 @@ def fetch_option_overview(ticker: str = "AD.AS", expand_all: bool = True) -> Tup
         - options_list: List of dicts with option data
         - underlying_data: Dict with underlying stock price, bid, ask, volume, timestamp
     """
-    logger.info(f"Fetching Beursduivel options for {ticker}...")
+    if url is None:
+        url = DEFAULT_AHOLD_URL
+        
+    logger.info(f"Fetching Beursduivel options for {ticker} from {url}...")
     
     # Start a session to maintain state
     session = requests.Session()
     session.headers.update(HEADERS)
     
     try:
-        r = session.get(AHOLD_URL, timeout=30)
+        r = session.get(url, timeout=30)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
     except Exception as e:
@@ -200,7 +205,7 @@ def fetch_option_overview(ticker: str = "AD.AS", expand_all: bool = True) -> Tup
                 "volume": int(volume) if volume else None,
                 "last_timestamp_text": time_text,
                 "scraped_at": datetime.now(),
-                "source_url": AHOLD_URL
+                "source_url": url
             }
             
             logger.info(f"📊 Underlying: {stock_name} @ €{price} (bid: €{bid}, ask: €{ask}) at {time_text}")
@@ -262,7 +267,7 @@ def fetch_option_overview(ticker: str = "AD.AS", expand_all: bool = True) -> Tup
             }
             
             try:
-                r = session.post(AHOLD_URL, data=post_data, timeout=30)
+                r = session.post(url, data=post_data, timeout=30)
                 r.raise_for_status()
                 
                 # Parse the expanded section
@@ -366,9 +371,11 @@ def fetch_option_overview(ticker: str = "AD.AS", expand_all: bool = True) -> Tup
                     else None
                 )
                 
-                # FILTER: Only include main monthly options (symbol_code = 'AH')
-                # Skip weekly/daily options (AH9, 2AH, 3AH, 4AH, etc.)
-                if symbol_code == 'AH':
+                # FILTER: Only include main monthly options (symbol_code = short ticker code)
+                # Skip weekly/daily options (AH9, 2AH, 3AH, 4AH, etc. for Ahold)
+                # For Ahold: AH, For ArcelorMittal: MT, etc.
+                # Rule: symbol_code should be 2-3 letters without numbers
+                if symbol_code and re.match(r'^[A-Z]{1,3}$', symbol_code):
                     options.append({
                         "ticker": ticker,
                         "type": opt_type,
@@ -446,12 +453,13 @@ def fetch_live_price(issue_id: str, detail_url: str) -> Optional[Dict]:
         return None
 
 
-def scrape_all_options(ticker: str = "AD.AS", fetch_live: bool = True) -> Tuple[List[Dict], Optional[Dict]]:
+def scrape_all_options(ticker: str = "AD.AS", url: str = None, fetch_live: bool = True) -> Tuple[List[Dict], Optional[Dict]]:
     """
     Main scraper function: fetch all options with pricing data + underlying stock data.
     
     Args:
         ticker: Stock ticker (default: AD.AS)
+        url: Beursduivel options page URL (if None, uses DEFAULT_AHOLD_URL)
         fetch_live: If True, fetch live data from detail pages (slower but more complete)
     
     Returns:
@@ -459,12 +467,15 @@ def scrape_all_options(ticker: str = "AD.AS", fetch_live: bool = True) -> Tuple[
         - options_list: List of option contracts with all available data
         - underlying_data: Dict with underlying stock price synchronized with options
     """
+    if url is None:
+        url = DEFAULT_AHOLD_URL
+        
     logger.info("="*60)
-    logger.info(f"🚀 Starting Beursduivel scraper for {ticker}")
+    logger.info(f"🚀 Starting Beursduivel scraper for {ticker} from {url}")
     logger.info("="*60)
     
     # Step 1: Get overview data (fast, has bid/ask for all contracts + underlying price)
-    options, underlying_data = fetch_option_overview(ticker)
+    options, underlying_data = fetch_option_overview(ticker, url=url)
     
     if not options:
         logger.error("No options fetched from overview page")

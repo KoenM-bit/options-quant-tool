@@ -32,7 +32,10 @@ x-airflow-common:
     SCRAPER_TIMEOUT: ${SCRAPER_TIMEOUT:-30}
     SCRAPER_RETRY_ATTEMPTS: ${SCRAPER_RETRY_ATTEMPTS:-3}
     
-    # Ahold settings
+    # Multi-Ticker Configuration
+    TICKERS_CONFIG: ${TICKERS_CONFIG}
+    
+    # Legacy Ahold settings (backwards compatibility)
     AHOLD_TICKER: ${AHOLD_TICKER:-AD.AS}
     AHOLD_SYMBOL_CODE: ${AHOLD_SYMBOL_CODE:-AEX.AH/O}
     

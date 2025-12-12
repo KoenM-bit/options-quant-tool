@@ -31,6 +31,7 @@ models:
     gold:
       +tags: ['gold', 'analytics']
       +materialized: table
+      +enabled: false  # Disabled - will rebuild after bronze/silver are stable
 
 tests:
   +severity: warn

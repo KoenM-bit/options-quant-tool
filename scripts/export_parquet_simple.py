@@ -173,39 +173,86 @@ def export_bronze_fd(trade_date: date, ticker: str) -> int:
 
 
 def export_silver(trade_date: date, ticker: str) -> int:
-    """Export silver_bd_options_enriched for a specific date."""
-    logger.info(f"Exporting silver BD options data for {trade_date}, ticker={ticker}")
+    """Export silver star schema (dim_underlying, dim_option_contract, fact_option_timeseries) for a specific date."""
+    logger.info(f"Exporting silver star schema for {trade_date}, ticker={ticker}")
+    
+    total_records = 0
     
     with get_db_session() as session:
-        query = text("""
+        # 1. Export dim_underlying (full refresh - small table)
+        logger.info("Exporting dim_underlying...")
+        query_underlying = text("""
             SELECT *
-            FROM silver_bd_options_enriched
-            WHERE trade_date = :trade_date AND ticker = :ticker
-            ORDER BY option_type, strike, expiry_date
+            FROM dim_underlying
+            WHERE ticker = :ticker
+            ORDER BY ticker
         """)
         
-        df = pd.read_sql(query, session.connection(), params={
+        df_underlying = pd.read_sql(query_underlying, session.connection(), params={'ticker': ticker})
+        
+        if len(df_underlying) > 0:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df_underlying.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            s3_path = f"silver/dim_underlying/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df_underlying)} dim_underlying records to s3://{minio_client.bucket}/{s3_path}")
+            Path(tmp_path).unlink()
+            total_records += len(df_underlying)
+        
+        # 2. Export dim_option_contract (full refresh for this ticker)
+        logger.info("Exporting dim_option_contract...")
+        query_contract = text("""
+            SELECT *
+            FROM dim_option_contract
+            WHERE ticker = :ticker
+            ORDER BY expiration_date, strike, call_put
+        """)
+        
+        df_contract = pd.read_sql(query_contract, session.connection(), params={'ticker': ticker})
+        
+        if len(df_contract) > 0:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df_contract.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            s3_path = f"silver/dim_option_contract/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df_contract)} dim_option_contract records to s3://{minio_client.bucket}/{s3_path}")
+            Path(tmp_path).unlink()
+            total_records += len(df_contract)
+        
+        # 3. Export fact_option_timeseries (partitioned by date)
+        logger.info("Exporting fact_option_timeseries...")
+        query_fact = text("""
+            SELECT f.*
+            FROM fact_option_timeseries f
+            JOIN dim_option_contract c ON f.option_id = c.option_id
+            WHERE f.trade_date = :trade_date AND c.ticker = :ticker
+            ORDER BY f.ts
+        """)
+        
+        df_fact = pd.read_sql(query_fact, session.connection(), params={
             'trade_date': trade_date,
             'ticker': ticker
         })
         
-        if len(df) > 0:
-            # Write to temp file
+        if len(df_fact) > 0:
             with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
-                df.to_parquet(tmp.name, index=False, engine='pyarrow')
+                df_fact.to_parquet(tmp.name, index=False, engine='pyarrow')
                 tmp_path = tmp.name
             
-            # Upload to MinIO
-            s3_path = f"silver/bd_options_enriched/date={trade_date}/ticker={ticker}/data.parquet"
+            s3_path = f"silver/fact_option_timeseries/date={trade_date}/ticker={ticker}/data.parquet"
             minio_client.upload_file(tmp_path, s3_path)
-            logger.info(f"✅ Exported {len(df)} silver BD records to s3://{minio_client.bucket}/{s3_path}")
-            
-            # Cleanup
+            logger.info(f"✅ Exported {len(df_fact)} fact_option_timeseries records to s3://{minio_client.bucket}/{s3_path}")
             Path(tmp_path).unlink()
-            return len(df)
+            total_records += len(df_fact)
         else:
-            logger.warning(f"No silver data found for {trade_date}, {ticker}")
-            return 0
+            logger.warning(f"No fact data found for {trade_date}, {ticker}")
+        
+        logger.info(f"✅ Total silver star schema records exported: {total_records}")
+        return total_records
 
 
 def export_gold(trade_date: date, ticker: str) -> int:

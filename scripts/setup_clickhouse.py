@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 def setup_clickhouse_minio_connection():
     """
-    Set up ClickHouse tables with MinIO S3 connection.
-    Creates table functions and materialized views for fast analytics.
+    Set up ClickHouse star schema tables with MinIO S3 connection.
+    Creates dimension and fact tables for fast analytics.
     """
     
     # MinIO credentials from environment
@@ -33,168 +33,225 @@ def setup_clickhouse_minio_connection():
     client = get_clickhouse_client()
     
     try:
-        logger.info("🚀 Setting up ClickHouse<->MinIO connection for silver layer...")
+        logger.info("🚀 Setting up ClickHouse star schema from MinIO...")
         
-        # 1. Drop existing tables
+        # 1. Drop existing tables (cleanup old schema)
         logger.info("Dropping existing tables...")
         client.drop_table('silver_options_enriched')
         client.drop_table('silver_options_by_expiry_mv')
         client.drop_table('silver_options_by_strike_mv')
+        client.drop_table('fact_option_timeseries')
+        client.drop_table('dim_option_contract')
+        client.drop_table('dim_underlying')
         
-        # 2. Create S3 table function for silver layer
-        # This creates a table that reads directly from MinIO parquet files with glob pattern
-        logger.info("Creating silver_options_enriched table...")
+        # ===================================================================
+        # 2. Create dim_underlying table
+        # ===================================================================
+        logger.info("Creating dim_underlying table...")
         
-        create_silver_table = f"""
-        CREATE TABLE IF NOT EXISTS silver_options_enriched
+        create_dim_underlying = """
+        CREATE TABLE IF NOT EXISTS dim_underlying
         (
-            -- Primary identifiers
+            underlying_id String,
             ticker String,
-            trade_date Date,
-            option_type LowCardinality(String),
-            strike Decimal(10, 2),
-            expiry_date Date,
-            symbol_code String,
-            issue_id String,
-            
-            -- Pricing data
-            bid Nullable(Decimal(10, 4)),
-            ask Nullable(Decimal(10, 4)),
-            mid_price Nullable(Decimal(10, 4)),
-            last_price Nullable(Decimal(10, 4)),
-            underlying_price Decimal(10, 4),
-            
-            -- Trading activity
-            volume Nullable(UInt32),
-            underlying_volume Nullable(UInt64),
-            last_timestamp Nullable(DateTime),
-            
-            -- Calculated fields
-            days_to_expiry Int32,
-            moneyness LowCardinality(String),
-            
-            -- Greeks (populated after enrichment)
-            delta Nullable(Decimal(10, 6)),
-            gamma Nullable(Decimal(10, 6)),
-            theta Nullable(Decimal(10, 6)),
-            vega Nullable(Decimal(10, 6)),
-            rho Nullable(Decimal(10, 6)),
-            implied_volatility Nullable(Decimal(8, 4)),
-            
-            -- Metadata
-            source_url Nullable(String),
-            scraped_at DateTime,
-            transformed_at DateTime
+            name Nullable(String),
+            asset_class LowCardinality(String),
+            sector Nullable(String),
+            exchange Nullable(String),
+            currency LowCardinality(String),
+            isin Nullable(String),
+            created_at DateTime,
+            updated_at DateTime
         )
-        ENGINE = MergeTree()
-        PARTITION BY toYYYYMM(trade_date)
-        ORDER BY (ticker, trade_date, option_type, strike, expiry_date)
-        PRIMARY KEY (ticker, trade_date)
-        SETTINGS index_granularity = 8192
+        ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY (underlying_id)
+        PRIMARY KEY (underlying_id)
         """
         
-        client.execute_command(create_silver_table)
-        logger.info("✅ Created silver_options_enriched table")
+        client.execute_command(create_dim_underlying)
+        logger.info("✅ Created dim_underlying table")
         
-        # 3. Create function to load data from MinIO parquet files
-        # This function will be called to refresh data
-        logger.info("Creating s3cluster function for MinIO access...")
+        # Load dim_underlying from MinIO
+        s3_path_underlying = f"{minio_endpoint}/{minio_bucket}/silver/dim_underlying/**/*.parquet"
         
-        # S3 function to read all silver parquet files
-        s3_path = f"{minio_endpoint}/{minio_bucket}/silver/bd_options_enriched/**/*.parquet"
-        
-        logger.info(f"MinIO path: {s3_path}")
-        
-        # 4. Insert initial data from MinIO
-        logger.info("Loading initial data from MinIO...")
-        
-        # Note: Parquet has extra 'date' column from partitioning
-        # We need to explicitly select columns in the right order
-        insert_query = f"""
-        INSERT INTO silver_options_enriched
-        SELECT 
-            ticker, trade_date, option_type, strike, expiry_date, 
-            symbol_code, issue_id,
-            bid, ask, mid_price, last_price, underlying_price,
-            volume, underlying_volume, last_timestamp,
-            days_to_expiry, moneyness,
-            delta, gamma, theta, vega, rho, implied_volatility,
-            source_url, scraped_at, transformed_at
+        insert_underlying = f"""
+        INSERT INTO dim_underlying
+        SELECT *
         FROM s3(
-            '{s3_path}',
+            '{s3_path_underlying}',
             '{minio_access_key}',
             '{minio_secret_key}',
             'Parquet'
         )
         """
         
-        client.execute_command(insert_query)
+        client.execute_command(insert_underlying)
+        count_underlying = client.get_table_count('dim_underlying')
+        logger.info(f"✅ Loaded {count_underlying} underlying records")
         
-        # Get count
-        count = client.get_table_count('silver_options_enriched')
-        logger.info(f"✅ Loaded {count} records into silver_options_enriched")
+        # ===================================================================
+        # 3. Create dim_option_contract table
+        # ===================================================================
+        logger.info("Creating dim_option_contract table...")
         
-        # 5. Create materialized view for expiry aggregations
-        logger.info("Creating materialized view for expiry aggregations...")
-        
-        create_expiry_mv = """
-        CREATE MATERIALIZED VIEW IF NOT EXISTS silver_options_by_expiry_mv
-        ENGINE = AggregatingMergeTree()
-        PARTITION BY toYYYYMM(trade_date)
-        ORDER BY (ticker, trade_date, expiry_date, option_type)
-        POPULATE
-        AS SELECT
-            ticker,
-            trade_date,
-            expiry_date,
-            option_type,
-            countState() AS contract_count,
-            avgState(strike) AS avg_strike,
-            avgState(mid_price) AS avg_mid_price,
-            avgState(implied_volatility) AS avg_iv,
-            avgState(delta) AS avg_delta,
-            sumState(volume) AS total_volume
-        FROM silver_options_enriched
-        GROUP BY ticker, trade_date, expiry_date, option_type
+        create_dim_contract = """
+        CREATE TABLE IF NOT EXISTS dim_option_contract
+        (
+            option_id String,
+            underlying_id String,
+            ticker String,
+            expiration_date Date,
+            strike Decimal(10, 2),
+            call_put LowCardinality(String),
+            contract_size UInt32,
+            style LowCardinality(String),
+            symbol_code Nullable(String),
+            issue_id Nullable(String),
+            isin Nullable(String),
+            created_at DateTime,
+            updated_at DateTime
+        )
+        ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY (option_id)
+        PRIMARY KEY (option_id)
         """
         
-        client.execute_command(create_expiry_mv)
-        logger.info("✅ Created materialized view: silver_options_by_expiry_mv")
+        client.execute_command(create_dim_contract)
+        logger.info("✅ Created dim_option_contract table")
         
-        # 6. Create materialized view for strike aggregations
-        logger.info("Creating materialized view for strike aggregations...")
+        # Load dim_option_contract from MinIO
+        s3_path_contract = f"{minio_endpoint}/{minio_bucket}/silver/dim_option_contract/**/*.parquet"
         
-        create_strike_mv = """
-        CREATE MATERIALIZED VIEW IF NOT EXISTS silver_options_by_strike_mv
-        ENGINE = AggregatingMergeTree()
-        PARTITION BY toYYYYMM(trade_date)
-        ORDER BY (ticker, trade_date, strike, option_type)
-        POPULATE
-        AS SELECT
-            ticker,
-            trade_date,
-            strike,
-            option_type,
-            countState() AS contract_count,
-            avgState(mid_price) AS avg_mid_price,
-            avgState(implied_volatility) AS avg_iv,
-            avgState(delta) AS avg_delta,
-            sumState(volume) AS total_volume,
-            avgState(underlying_price) AS avg_underlying_price
-        FROM silver_options_enriched
-        GROUP BY ticker, trade_date, strike, option_type
+        insert_contract = f"""
+        INSERT INTO dim_option_contract
+        SELECT *
+        FROM s3(
+            '{s3_path_contract}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
         """
         
-        client.execute_command(create_strike_mv)
-        logger.info("✅ Created materialized view: silver_options_by_strike_mv")
+        client.execute_command(insert_contract)
+        count_contract = client.get_table_count('dim_option_contract')
+        logger.info(f"✅ Loaded {count_contract} option contract records")
         
-        # 7. Optimize tables
+        # ===================================================================
+        # 4. Create fact_option_timeseries table
+        # ===================================================================
+        logger.info("Creating fact_option_timeseries table...")
+        
+        create_fact_table = """
+        CREATE TABLE IF NOT EXISTS fact_option_timeseries
+        (
+            ts_id UInt64,
+            trade_date Date,
+            ts DateTime,
+            option_id String,
+            underlying_id String,
+            
+            -- Pricing
+            underlying_price Decimal(10, 4),
+            bid Nullable(Decimal(10, 4)),
+            ask Nullable(Decimal(10, 4)),
+            mid_price Nullable(Decimal(10, 4)),
+            last_price Nullable(Decimal(10, 4)),
+            
+            -- Greeks
+            iv Nullable(Decimal(10, 6)),
+            delta Nullable(Decimal(10, 6)),
+            gamma Nullable(Decimal(10, 6)),
+            theta Nullable(Decimal(10, 6)),
+            vega Nullable(Decimal(10, 6)),
+            rho Nullable(Decimal(10, 6)),
+            
+            -- Trading activity
+            volume Nullable(UInt32),
+            open_interest Nullable(UInt32),
+            
+            -- Derived metrics
+            intrinsic_value Nullable(Decimal(10, 4)),
+            time_value Nullable(Decimal(10, 4)),
+            moneyness LowCardinality(String),
+            days_to_expiry Int32,
+            
+            -- Metadata
+            source LowCardinality(String),
+            created_at DateTime
+        )
+        ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (trade_date, option_id, ts)
+        PRIMARY KEY (trade_date, option_id)
+        SETTINGS index_granularity = 8192
+        """
+        
+        client.execute_command(create_fact_table)
+        logger.info("✅ Created fact_option_timeseries table")
+        
+        # Load fact_option_timeseries from MinIO
+        s3_path_fact = f"{minio_endpoint}/{minio_bucket}/silver/fact_option_timeseries/**/*.parquet"
+        
+        insert_fact = f"""
+        INSERT INTO fact_option_timeseries
+        SELECT *
+        FROM s3(
+            '{s3_path_fact}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        client.execute_command(insert_fact)
+        count_fact = client.get_table_count('fact_option_timeseries')
+        logger.info(f"✅ Loaded {count_fact} fact timeseries records")
+        
+        # ===================================================================
+        # 5. Create materialized view for daily aggregations
+        # ===================================================================
+        logger.info("Creating materialized view for daily aggregations...")
+        
+        create_daily_mv = """
+        CREATE MATERIALIZED VIEW IF NOT EXISTS fact_daily_summary_mv
+        ENGINE = AggregatingMergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (trade_date, underlying_id, expiration_date, call_put)
+        POPULATE
+        AS SELECT
+            f.trade_date,
+            f.underlying_id,
+            c.expiration_date,
+            c.call_put,
+            countState() AS contract_count,
+            avgState(c.strike) AS avg_strike,
+            avgState(f.mid_price) AS avg_mid_price,
+            avgState(f.iv) AS avg_iv,
+            avgState(f.delta) AS avg_delta,
+            sumState(f.volume) AS total_volume,
+            avgState(f.underlying_price) AS avg_underlying_price
+        FROM fact_option_timeseries f
+        JOIN dim_option_contract c ON f.option_id = c.option_id
+        GROUP BY f.trade_date, f.underlying_id, c.expiration_date, c.call_put
+        """
+        
+        client.execute_command(create_daily_mv)
+        logger.info("✅ Created materialized view: fact_daily_summary_mv")
+        
+        # ===================================================================
+        # 6. Optimize tables
+        # ===================================================================
         logger.info("Optimizing tables...")
-        client.optimize_table('silver_options_enriched')
+        client.optimize_table('dim_underlying')
+        client.optimize_table('dim_option_contract')
+        client.optimize_table('fact_option_timeseries')
         
-        # 8. Show table info
+        # ===================================================================
+        # 7. Show table info
+        # ===================================================================
         logger.info("\n📊 Table Information:")
-        tables = ['silver_options_enriched', 'silver_options_by_expiry_mv', 'silver_options_by_strike_mv']
+        tables = ['dim_underlying', 'dim_option_contract', 'fact_option_timeseries', 'fact_daily_summary_mv']
         for table in tables:
             if client.table_exists(table):
                 info = client.get_table_info(table)
@@ -203,9 +260,13 @@ def setup_clickhouse_minio_connection():
                 logger.info(f"  Size: {info['size']}")
                 logger.info(f"  Columns: {len(info['columns'])}")
         
-        logger.info("\n✅ ClickHouse<->MinIO setup complete!")
+        logger.info("\n✅ ClickHouse star schema setup complete!")
         logger.info(f"\nQuery example:")
-        logger.info(f"  SELECT * FROM silver_options_enriched WHERE trade_date = '2025-12-10' LIMIT 10")
+        logger.info(f"  SELECT f.trade_date, u.ticker, c.strike, c.call_put, f.mid_price, f.iv, f.delta")
+        logger.info(f"  FROM fact_option_timeseries f")
+        logger.info(f"  JOIN dim_option_contract c ON f.option_id = c.option_id")
+        logger.info(f"  JOIN dim_underlying u ON f.underlying_id = u.underlying_id")
+        logger.info(f"  WHERE f.trade_date = '2025-12-10' LIMIT 10")
         
     except Exception as e:
         logger.error(f"❌ Setup failed: {e}")
@@ -216,7 +277,7 @@ def setup_clickhouse_minio_connection():
 
 def refresh_clickhouse_from_minio():
     """
-    Refresh ClickHouse data from MinIO (incremental load).
+    Refresh ClickHouse star schema from MinIO (incremental load).
     Run this after new data is exported to MinIO.
     """
     
@@ -232,46 +293,111 @@ def refresh_clickhouse_from_minio():
     client = get_clickhouse_client()
     
     try:
-        logger.info("🔄 Refreshing ClickHouse from MinIO...")
+        logger.info("🔄 Refreshing ClickHouse star schema from MinIO...")
+        
+        # ===================================================================
+        # 1. Refresh dim_underlying (full replace - small table)
+        # ===================================================================
+        logger.info("Refreshing dim_underlying...")
+        client.execute_command("TRUNCATE TABLE dim_underlying")
+        
+        s3_path_underlying = f"{minio_endpoint}/{minio_bucket}/silver/dim_underlying/**/*.parquet"
+        
+        insert_underlying = f"""
+        INSERT INTO dim_underlying
+        SELECT *
+        FROM s3(
+            '{s3_path_underlying}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        client.execute_command(insert_underlying)
+        count_underlying = client.get_table_count('dim_underlying')
+        logger.info(f"✅ Refreshed {count_underlying} underlying records")
+        
+        # ===================================================================
+        # 2. Refresh dim_option_contract (full replace - relatively small)
+        # ===================================================================
+        logger.info("Refreshing dim_option_contract...")
+        client.execute_command("TRUNCATE TABLE dim_option_contract")
+        
+        s3_path_contract = f"{minio_endpoint}/{minio_bucket}/silver/dim_option_contract/**/*.parquet"
+        
+        insert_contract = f"""
+        INSERT INTO dim_option_contract
+        SELECT *
+        FROM s3(
+            '{s3_path_contract}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        client.execute_command(insert_contract)
+        count_contract = client.get_table_count('dim_option_contract')
+        logger.info(f"✅ Refreshed {count_contract} option contract records")
+        
+        # ===================================================================
+        # 3. Refresh fact_option_timeseries (incremental - only new dates)
+        # ===================================================================
+        logger.info("Refreshing fact_option_timeseries (incremental)...")
         
         # Get max trade_date in ClickHouse
-        result = client.execute("SELECT max(trade_date) FROM silver_options_enriched")
+        result = client.execute("SELECT max(trade_date) FROM fact_option_timeseries")
         max_date = result.first_row[0] if result.first_row else None
         
         logger.info(f"Latest date in ClickHouse: {max_date}")
         
         # Insert new data from MinIO
-        s3_path = f"{minio_endpoint}/{minio_bucket}/silver/bd_options_enriched/**/*.parquet"
+        s3_path_fact = f"{minio_endpoint}/{minio_bucket}/silver/fact_option_timeseries/**/*.parquet"
         
-        # Explicitly select columns (parquet has extra 'date' column from partitioning)
-        insert_query = f"""
-        INSERT INTO silver_options_enriched
-        SELECT 
-            ticker, trade_date, option_type, strike, expiry_date,
-            symbol_code, issue_id,
-            bid, ask, mid_price, last_price, underlying_price,
-            volume, underlying_volume, last_timestamp,
-            days_to_expiry, moneyness,
-            delta, gamma, theta, vega, rho, implied_volatility,
-            source_url, scraped_at, transformed_at
-        FROM s3(
-            '{s3_path}',
-            '{minio_access_key}',
-            '{minio_secret_key}',
-            'Parquet'
-        )
-        WHERE trade_date > '{max_date}'
-        """
+        if max_date:
+            # Multi-ticker support: Insert data that doesn't already exist (by option_id + trade_date)
+            # This allows new tickers to be added for the same date
+            insert_fact = f"""
+            INSERT INTO fact_option_timeseries
+            SELECT s.*
+            FROM s3(
+                '{s3_path_fact}',
+                '{minio_access_key}',
+                '{minio_secret_key}',
+                'Parquet'
+            ) s
+            WHERE s.trade_date >= '{max_date}'
+            AND NOT EXISTS (
+                SELECT 1 FROM fact_option_timeseries existing
+                WHERE existing.option_id = s.option_id 
+                AND existing.trade_date = s.trade_date
+            )
+            """
+        else:
+            # First load - get all data
+            insert_fact = f"""
+            INSERT INTO fact_option_timeseries
+            SELECT *
+            FROM s3(
+                '{s3_path_fact}',
+                '{minio_access_key}',
+                '{minio_secret_key}',
+                'Parquet'
+            )
+            """
         
-        client.execute_command(insert_query)
+        client.execute_command(insert_fact)
+        count_fact = client.get_table_count('fact_option_timeseries')
+        logger.info(f"✅ ClickHouse now has {count_fact:,} total fact records")
         
-        # Get new count
-        count = client.get_table_count('silver_options_enriched')
-        logger.info(f"✅ ClickHouse now has {count:,} total records")
-        
-        # Optimize
-        logger.info("Optimizing table...")
-        client.optimize_table('silver_options_enriched')
+        # ===================================================================
+        # 4. Optimize tables
+        # ===================================================================
+        logger.info("Optimizing tables...")
+        client.optimize_table('dim_underlying')
+        client.optimize_table('dim_option_contract')
+        client.optimize_table('fact_option_timeseries')
         
         logger.info("✅ Refresh complete!")
         
