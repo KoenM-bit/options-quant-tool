@@ -39,16 +39,16 @@ class Settings(BaseSettings):
     #   {
     #     "ticker": "AD.AS",
     #     "symbol_code": "AEX.AH/O",
-    #     "bd_url": "https://www.beursgorilla.nl/Aandeel-Koers/1/Ahold-Delhaize/Opties.aspx"
+    #     "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"
     #   },
     #   {
     #     "ticker": "MT.AS", 
     #     "symbol_code": "AEX.MT/O",
-    #     "bd_url": "https://www.beursgorilla.nl/Aandeel-Koers/11895/ArcelorMittal/Opties.aspx"
+    #     "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11895/ArcelorMittal/opties-expiratiedatum.aspx"
     #   }
     # ]
     tickers_config: str = Field(
-        default='[{"ticker": "AD.AS", "symbol_code": "AEX.AH/O", "bd_url": "https://www.beursgorilla.nl/Aandeel-Koers/1/Ahold-Delhaize/Opties.aspx"}]',
+        default='[{"ticker": "AD.AS", "symbol_code": "AEX.AH/O", "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"}]',
         env="TICKERS_CONFIG"
     )
     
