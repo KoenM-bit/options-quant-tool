@@ -34,21 +34,9 @@ class Settings(BaseSettings):
     
     # Ticker Configuration (Multi-Ticker Support)
     # Format: JSON list of dicts with ticker, symbol_code (FD), and bd_url (Beursduivel)
-    # Example:
-    # [
-    #   {
-    #     "ticker": "AD.AS",
-    #     "symbol_code": "AEX.AH/O",
-    #     "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"
-    #   },
-    #   {
-    #     "ticker": "MT.AS", 
-    #     "symbol_code": "AEX.MT/O",
-    #     "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11895/ArcelorMittal/opties-expiratiedatum.aspx"
-    #   }
-    # ]
+    # Default includes both AD.AS (Ahold Delhaize) and MT.AS (ArcelorMittal)
     tickers_config: str = Field(
-        default='[{"ticker": "AD.AS", "symbol_code": "AEX.AH/O", "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"}]',
+        default='[{"ticker": "AD.AS", "symbol_code": "AEX.AH/O", "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11755/Ahold-Delhaize-Koninklijke/opties-expiratiedatum.aspx"}, {"ticker": "MT.AS", "symbol_code": "AEX.MT/O", "bd_url": "https://www.beursduivel.be/Aandeel-Koers/11895/ArcelorMittal/opties-expiratiedatum.aspx"}]',
         env="TICKERS_CONFIG"
     )
     
