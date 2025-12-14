@@ -57,28 +57,12 @@ SELECT
     MD5(d.ticker || d.expiry_date::TEXT || d.strike::TEXT || d.call_put) as option_id,
     MD5(d.ticker) as underlying_id,
     
-    -- Pricing (end-of-day settlement)
-    d.underlying_price,
-    d.bid,
-    d.ask,
-    d.mid_price,
+    -- EOD settlement price
     d.last_price,
     
-    -- Market activity (OFFICIAL end-of-day numbers)
+    -- Market activity (OFFICIAL end-of-day numbers - the critical data!)
     d.volume,
     d.open_interest,
-    
-    -- Derived measures
-    CASE 
-        WHEN d.call_put = 'C' THEN GREATEST(d.underlying_price - d.strike, 0)
-        ELSE GREATEST(d.strike - d.underlying_price, 0)
-    END as intrinsic_value,
-    d.mid_price - CASE 
-        WHEN d.call_put = 'C' THEN GREATEST(d.underlying_price - d.strike, 0)
-        ELSE GREATEST(d.strike - d.underlying_price, 0)
-    END as time_value,
-    d.underlying_price / NULLIF(d.strike, 0) as moneyness,
-    d.expiry_date - d.trade_date as days_to_expiry,
     
     -- Metadata
     d.source,

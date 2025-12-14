@@ -293,22 +293,12 @@ def setup_clickhouse_minio_connection():
             option_id String,
             underlying_id String,
             
-            -- Pricing (EOD settlement)
-            underlying_price Decimal(10, 4),
-            bid Nullable(Decimal(10, 4)),
-            ask Nullable(Decimal(10, 4)),
-            mid_price Nullable(Decimal(10, 4)),
+            -- EOD settlement price
             last_price Nullable(Decimal(10, 4)),
             
-            -- Market activity (OFFICIAL EOD)
+            -- Market activity (OFFICIAL EOD - the critical data!)
             volume Nullable(UInt32),
             open_interest Nullable(UInt32),
-            
-            -- Derived metrics
-            intrinsic_value Nullable(Decimal(10, 4)),
-            time_value Nullable(Decimal(10, 4)),
-            moneyness Nullable(Decimal(10, 6)),
-            days_to_expiry Int32,
             
             -- Metadata
             source LowCardinality(String),

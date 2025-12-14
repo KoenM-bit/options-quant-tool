@@ -46,24 +46,12 @@ class FactOptionEOD(Base):
     option_contract = relationship("DimContract")
     underlying = relationship("DimUnderlying")
     
-    # === UNDERLYING PRICE (EOD) ===
-    underlying_price = Column(Numeric(10, 4), comment="Underlying closing price")
-    
-    # === OPTION PRICING (EOD SETTLEMENT) ===
-    bid = Column(Numeric(10, 4), comment="End-of-day bid")
-    ask = Column(Numeric(10, 4), comment="End-of-day ask")
-    mid_price = Column(Numeric(10, 4), comment="(bid + ask) / 2")
-    last_price = Column(Numeric(10, 4), comment="Last traded price")
+    # === EOD SETTLEMENT PRICE ===
+    last_price = Column(Numeric(10, 4), comment="Official settlement/closing price")
     
     # === MARKET ACTIVITY (OFFICIAL EOD) ===
     volume = Column(Integer, comment="Total daily volume")
     open_interest = Column(Integer, comment="Open interest at close (CRITICAL!)")
-    
-    # === DERIVED MEASURES ===
-    intrinsic_value = Column(Numeric(10, 4))
-    time_value = Column(Numeric(10, 4))
-    moneyness = Column(Numeric(10, 6))
-    days_to_expiry = Column(Integer)
     
     # === SOURCE ===
     source = Column(String(50), default="fd.nl")
