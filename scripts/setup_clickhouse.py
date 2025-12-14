@@ -209,6 +209,143 @@ def setup_clickhouse_minio_connection():
         logger.info(f"✅ Loaded {count_fact} fact timeseries records")
         
         # ===================================================================
+        # 4b. Create fact_market_overview table (daily market totals)
+        # ===================================================================
+        logger.info("Creating fact_market_overview table...")
+        
+        create_market_overview_table = """
+        CREATE TABLE IF NOT EXISTS fact_market_overview
+        (
+            overview_id UInt64,
+            trade_date Date,
+            underlying_id String,
+            
+            -- Underlying price metrics
+            underlying_price Nullable(Decimal(10, 4)),
+            underlying_open Nullable(Decimal(10, 4)),
+            underlying_high Nullable(Decimal(10, 4)),
+            underlying_low Nullable(Decimal(10, 4)),
+            underlying_volume Nullable(UInt32),
+            underlying_change Nullable(Decimal(10, 4)),
+            underlying_change_pct Nullable(Float32),
+            
+            -- Total volume
+            total_volume Nullable(UInt32),
+            total_call_volume Nullable(UInt32),
+            total_put_volume Nullable(UInt32),
+            
+            -- Total open interest
+            total_oi Nullable(UInt32),
+            total_call_oi Nullable(UInt32),
+            total_put_oi Nullable(UInt32),
+            
+            -- Ratios
+            call_put_volume_ratio Nullable(Float32),
+            call_put_oi_ratio Nullable(Float32),
+            
+            -- Metadata
+            market_time LowCardinality(String),
+            source LowCardinality(String),
+            created_at DateTime
+        )
+        ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (trade_date, underlying_id)
+        PRIMARY KEY (trade_date, underlying_id)
+        SETTINGS index_granularity = 8192
+        """
+        
+        client.execute_command(create_market_overview_table)
+        logger.info("✅ Created fact_market_overview table")
+        
+        # Load fact_market_overview from MinIO
+        s3_path_overview = f"{minio_endpoint}/{minio_bucket}/silver/fact_market_overview/**/*.parquet"
+        
+        insert_overview = f"""
+        INSERT INTO fact_market_overview
+        SELECT *
+        FROM s3(
+            '{s3_path_overview}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        try:
+            client.execute_command(insert_overview)
+            count_overview = client.get_table_count('fact_market_overview')
+            logger.info(f"✅ Loaded {count_overview} fact market overview records")
+        except Exception as e:
+            logger.warning(f"⚠️  No market overview data found in MinIO (this is OK if first run): {e}")
+        
+        # ===================================================================
+        # 4c. Create fact_option_eod table (end-of-day FD data)
+        # ===================================================================
+        logger.info("Creating fact_option_eod table...")
+        
+        create_eod_table = """
+        CREATE TABLE IF NOT EXISTS fact_option_eod
+        (
+            eod_id UInt64,
+            trade_date Date,
+            ts DateTime,
+            option_id String,
+            underlying_id String,
+            
+            -- Pricing (EOD settlement)
+            underlying_price Decimal(10, 4),
+            bid Nullable(Decimal(10, 4)),
+            ask Nullable(Decimal(10, 4)),
+            mid_price Nullable(Decimal(10, 4)),
+            last_price Nullable(Decimal(10, 4)),
+            
+            -- Market activity (OFFICIAL EOD)
+            volume Nullable(UInt32),
+            open_interest Nullable(UInt32),
+            
+            -- Derived metrics
+            intrinsic_value Nullable(Decimal(10, 4)),
+            time_value Nullable(Decimal(10, 4)),
+            moneyness Nullable(Decimal(10, 6)),
+            days_to_expiry Int32,
+            
+            -- Metadata
+            source LowCardinality(String),
+            created_at DateTime
+        )
+        ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (trade_date, option_id)
+        PRIMARY KEY (trade_date, option_id)
+        SETTINGS index_granularity = 8192
+        """
+        
+        client.execute_command(create_eod_table)
+        logger.info("✅ Created fact_option_eod table")
+        
+        # Load fact_option_eod from MinIO
+        s3_path_eod = f"{minio_endpoint}/{minio_bucket}/silver/fact_option_eod/**/*.parquet"
+        
+        insert_eod = f"""
+        INSERT INTO fact_option_eod
+        SELECT *
+        FROM s3(
+            '{s3_path_eod}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        try:
+            client.execute_command(insert_eod)
+            count_eod = client.get_table_count('fact_option_eod')
+            logger.info(f"✅ Loaded {count_eod} fact EOD records")
+        except Exception as e:
+            logger.warning(f"⚠️  No EOD data found in MinIO (this is OK if first run): {e}")
+        
+        # ===================================================================
         # 5. Create materialized view for daily aggregations
         # ===================================================================
         logger.info("Creating materialized view for daily aggregations...")
@@ -246,12 +383,14 @@ def setup_clickhouse_minio_connection():
         client.optimize_table('dim_underlying')
         client.optimize_table('dim_option_contract')
         client.optimize_table('fact_option_timeseries')
+        client.optimize_table('fact_option_eod')
+        client.optimize_table('fact_market_overview')
         
         # ===================================================================
         # 7. Show table info
         # ===================================================================
         logger.info("\n📊 Table Information:")
-        tables = ['dim_underlying', 'dim_option_contract', 'fact_option_timeseries', 'fact_daily_summary_mv']
+        tables = ['dim_underlying', 'dim_option_contract', 'fact_option_timeseries', 'fact_option_eod', 'fact_market_overview', 'fact_daily_summary_mv']
         for table in tables:
             if client.table_exists(table):
                 info = client.get_table_info(table)

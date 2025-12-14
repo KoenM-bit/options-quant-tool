@@ -6,7 +6,8 @@
   )
 }}
 
--- fact_option_timeseries: Populate from bronze with dimension lookups
+-- fact_option_timeseries: Intraday pricing from Beursduivel ONLY
+-- This is real-time bid/ask data scraped during trading hours
 
 WITH bronze_data AS (
     SELECT
@@ -20,13 +21,13 @@ WITH bronze_data AS (
         (bo.bid + bo.ask) / 2.0 as mid_price,
         bo.last_price,
         bo.volume,
-        NULL::INTEGER as open_interest,
+        NULL::INTEGER as open_interest,  -- BD doesn't provide OI
         bu.last_price::NUMERIC(10,4) as underlying_price,
         bu.bid::NUMERIC(10,4) as underlying_bid,
         bu.ask::NUMERIC(10,4) as underlying_ask,
         'beursduivel' as source
-    FROM {{ ref('bronze_bd_options') }} bo
-    LEFT JOIN {{ ref('bronze_bd_underlying') }} bu
+    FROM {{ source('bronze', 'bronze_bd_options') }} bo
+    LEFT JOIN {{ source('bronze', 'bronze_bd_underlying') }} bu
         ON bo.ticker = bu.ticker
         AND bo.trade_date = bu.trade_date::DATE
     WHERE bo.ticker IS NOT NULL
@@ -34,10 +35,9 @@ WITH bronze_data AS (
     
     {% if is_incremental() %}
         -- Multi-ticker support: Check max trade_date PER TICKER
-        -- This ensures new tickers get processed even if other tickers already have today's data
         AND NOT EXISTS (
             SELECT 1 FROM {{ this }} existing
-            JOIN dim_option_contract c ON existing.option_id = c.option_id
+            JOIN {{ ref('dim_option_contract') }} c ON existing.option_id = c.option_id
             WHERE c.ticker = bo.ticker 
             AND existing.trade_date = bo.trade_date
         )

@@ -65,26 +65,13 @@ echo ""
 echo "=========================================="
 echo "3️⃣  Cleaning MinIO Buckets"
 echo "=========================================="
-
-# Check if mc (MinIO client) is installed
-if ! command -v mc &> /dev/null; then
-    echo "⚠️  MinIO client (mc) not found. Install with: brew install minio/stable/mc"
-    echo "Skipping MinIO cleanup..."
-else
-    # Configure mc alias for Synology MinIO
-    mc alias set synology http://${MINIO_ENDPOINT} ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} 2>/dev/null || true
-    
-    echo "Removing bronze data..."
-    mc rm --recursive --force synology/options-data/bronze/ 2>/dev/null || echo "No bronze data to remove"
-    
-    echo "Removing silver data..."
-    mc rm --recursive --force synology/options-data/silver/ 2>/dev/null || echo "No silver data to remove"
-    
-    echo "Removing gold data..."
-    mc rm --recursive --force synology/options-data/gold/ 2>/dev/null || echo "No gold data to remove"
-    
-    echo "✓ MinIO cleaned"
-fi
+echo ""
+echo "⚠️  Please clean MinIO manually via web UI at http://${MINIO_ENDPOINT}"
+echo "   1. Login with credentials: ${MINIO_ACCESS_KEY}"
+echo "   2. Navigate to 'options-data' bucket"
+echo "   3. Delete bronze/, silver/, and gold/ folders"
+echo ""
+read -p "Press Enter once MinIO is cleaned..."
 
 echo ""
 echo "=========================================="
@@ -92,16 +79,16 @@ echo "4️⃣  Cleaning ClickHouse Tables"
 echo "=========================================="
 
 echo "Truncating dim_underlying..."
-RESULT=$(curl -s "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}&query=TRUNCATE+TABLE+ahold_options.dim_underlying" 2>&1)
-[ $? -eq 0 ] && echo "✓ dim_underlying truncated" || echo "⚠️  Error: $RESULT"
+curl -X POST "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}" --data-binary "TRUNCATE TABLE ahold_options.dim_underlying" 2>/dev/null
+echo "✓ dim_underlying truncated"
 
 echo "Truncating dim_option_contract..."
-RESULT=$(curl -s "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}&query=TRUNCATE+TABLE+ahold_options.dim_option_contract" 2>&1)
-[ $? -eq 0 ] && echo "✓ dim_option_contract truncated" || echo "⚠️  Error: $RESULT"
+curl -X POST "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}" --data-binary "TRUNCATE TABLE ahold_options.dim_option_contract" 2>/dev/null
+echo "✓ dim_option_contract truncated"
 
 echo "Truncating fact_option_timeseries..."
-RESULT=$(curl -s "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}&query=TRUNCATE+TABLE+ahold_options.fact_option_timeseries" 2>&1)
-[ $? -eq 0 ] && echo "✓ fact_option_timeseries truncated" || echo "⚠️  Error: $RESULT"
+curl -X POST "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}" --data-binary "TRUNCATE TABLE ahold_options.fact_option_timeseries" 2>/dev/null
+echo "✓ fact_option_timeseries truncated"
 
 echo ""
 echo "=========================================="
@@ -134,15 +121,7 @@ SELECT 'fact_option_timeseries', COUNT(*) FROM fact_option_timeseries;
 
 echo ""
 echo "ClickHouse:"
-curl -s "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}" --data-binary "
-SELECT 
-    'dim_underlying' as table_name, count() as count FROM ahold_options.dim_underlying
-UNION ALL
-SELECT 'dim_option_contract', count() FROM ahold_options.dim_option_contract
-UNION ALL
-SELECT 'fact_option_timeseries', count() FROM ahold_options.fact_option_timeseries
-FORMAT PrettyCompact
-"
+curl "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}" --data-binary "SELECT 'dim_underlying' as table_name, count() as count FROM ahold_options.dim_underlying UNION ALL SELECT 'dim_option_contract', count() FROM ahold_options.dim_option_contract UNION ALL SELECT 'fact_option_timeseries', count() FROM ahold_options.fact_option_timeseries FORMAT PrettyCompact"
 
 echo ""
 echo "=========================================="

@@ -173,7 +173,15 @@ def export_bronze_fd(trade_date: date, ticker: str) -> int:
 
 
 def export_silver(trade_date: date, ticker: str) -> int:
-    """Export silver star schema (dim_underlying, dim_option_contract, fact_option_timeseries) for a specific date."""
+    """Export silver star schema (dims + facts) for a specific date.
+    
+    Exports:
+    - dim_underlying (per ticker)
+    - dim_option_contract (per ticker)
+    - fact_option_timeseries (per date, per ticker) - Intraday BD data
+    - fact_option_eod (per date, per ticker) - End-of-day FD data with OI
+    - fact_market_overview (per date, per ticker) - Daily market totals
+    """
     logger.info(f"Exporting silver star schema for {trade_date}, ticker={ticker}")
     
     total_records = 0
@@ -249,7 +257,62 @@ def export_silver(trade_date: date, ticker: str) -> int:
             Path(tmp_path).unlink()
             total_records += len(df_fact)
         else:
-            logger.warning(f"No fact data found for {trade_date}, {ticker}")
+            logger.warning(f"No fact_option_timeseries data found for {trade_date}, {ticker}")
+        
+        # 4. Export fact_option_eod (partitioned by date)
+        logger.info("Exporting fact_option_eod...")
+        query_eod = text("""
+            SELECT e.*
+            FROM fact_option_eod e
+            JOIN dim_option_contract c ON e.option_id = c.option_id
+            WHERE e.trade_date = :trade_date AND c.ticker = :ticker
+            ORDER BY e.ts
+        """)
+        
+        df_eod = pd.read_sql(query_eod, session.connection(), params={
+            'trade_date': trade_date,
+            'ticker': ticker
+        })
+        
+        if len(df_eod) > 0:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df_eod.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            s3_path = f"silver/fact_option_eod/date={trade_date}/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df_eod)} fact_option_eod records to s3://{minio_client.bucket}/{s3_path}")
+            Path(tmp_path).unlink()
+            total_records += len(df_eod)
+        else:
+            logger.warning(f"No fact_option_eod data found for {trade_date}, {ticker}")
+        
+        # 5. Export fact_market_overview (partitioned by date)
+        logger.info("Exporting fact_market_overview...")
+        query_overview = text("""
+            SELECT o.*
+            FROM fact_market_overview o
+            JOIN dim_underlying u ON o.underlying_id = u.underlying_id
+            WHERE o.trade_date = :trade_date AND u.ticker = :ticker
+        """)
+        
+        df_overview = pd.read_sql(query_overview, session.connection(), params={
+            'trade_date': trade_date,
+            'ticker': ticker
+        })
+        
+        if len(df_overview) > 0:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df_overview.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            s3_path = f"silver/fact_market_overview/date={trade_date}/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df_overview)} fact_market_overview records to s3://{minio_client.bucket}/{s3_path}")
+            Path(tmp_path).unlink()
+            total_records += len(df_overview)
+        else:
+            logger.warning(f"No fact_market_overview data found for {trade_date}, {ticker}")
         
         logger.info(f"✅ Total silver star schema records exported: {total_records}")
         return total_records
