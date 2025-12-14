@@ -336,7 +336,230 @@ def setup_clickhouse_minio_connection():
             logger.warning(f"⚠️  No EOD data found in MinIO (this is OK if first run): {e}")
         
         # ===================================================================
-        # 5. Create materialized view for daily aggregations
+        # 4d. Create bronze_ohlcv table (stock OHLCV data)
+        # ===================================================================
+        logger.info("Creating bronze_ohlcv table...")
+        
+        create_ohlcv_table = """
+        CREATE TABLE IF NOT EXISTS bronze_ohlcv
+        (
+            id UInt64,
+            ticker LowCardinality(String),
+            trade_date Date,
+            open Decimal(10, 4),
+            high Decimal(10, 4),
+            low Decimal(10, 4),
+            close Decimal(10, 4),
+            volume UInt64,
+            adj_close Decimal(10, 4),
+            source LowCardinality(String),
+            created_at DateTime,
+            updated_at DateTime,
+            scraped_at DateTime
+        )
+        ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (ticker, trade_date)
+        PRIMARY KEY (ticker, trade_date)
+        SETTINGS index_granularity = 8192
+        """
+        
+        client.execute_command(create_ohlcv_table)
+        logger.info("✅ Created bronze_ohlcv table")
+        
+        # Load bronze_ohlcv from MinIO
+        s3_path_ohlcv = f"{minio_endpoint}/{minio_bucket}/bronze/ohlcv/**/*.parquet"
+        
+        insert_ohlcv = f"""
+        INSERT INTO bronze_ohlcv
+        SELECT *
+        FROM s3(
+            '{s3_path_ohlcv}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        try:
+            client.execute_command(insert_ohlcv)
+            count_ohlcv = client.get_table_count('bronze_ohlcv')
+            logger.info(f"✅ Loaded {count_ohlcv:,} OHLCV records from MinIO")
+        except Exception as e:
+            logger.warning(f"⚠️  No OHLCV data found in MinIO (this is OK if first run): {e}")
+        
+        # ===================================================================
+        # 4e. Create fact_technical_indicators table
+        # ===================================================================
+        logger.info("Creating fact_technical_indicators table...")
+        
+        create_tech_indicators_table = """
+        CREATE TABLE IF NOT EXISTS fact_technical_indicators
+        (
+            indicator_id UInt64,
+            ticker LowCardinality(String),
+            trade_date Date,
+            close Nullable(Decimal(10, 4)),
+            volume Nullable(UInt64),
+            
+            -- Trend Indicators
+            sma_20 Nullable(Decimal(10, 4)),
+            sma_50 Nullable(Decimal(10, 4)),
+            sma_200 Nullable(Decimal(10, 4)),
+            ema_12 Nullable(Decimal(10, 4)),
+            ema_26 Nullable(Decimal(10, 4)),
+            
+            -- MACD
+            macd Nullable(Decimal(10, 4)),
+            macd_signal Nullable(Decimal(10, 4)),
+            macd_histogram Nullable(Decimal(10, 4)),
+            
+            -- Momentum
+            rsi_14 Nullable(Decimal(10, 4)),
+            stochastic_k Nullable(Decimal(10, 4)),
+            stochastic_d Nullable(Decimal(10, 4)),
+            roc_20 Nullable(Decimal(10, 4)),
+            
+            -- Volatility
+            atr_14 Nullable(Decimal(10, 4)),
+            bollinger_upper Nullable(Decimal(10, 4)),
+            bollinger_middle Nullable(Decimal(10, 4)),
+            bollinger_lower Nullable(Decimal(10, 4)),
+            bollinger_width Nullable(Decimal(10, 4)),
+            realized_volatility_20 Nullable(Decimal(10, 4)),
+            parkinson_volatility_20 Nullable(Decimal(10, 4)),
+            
+            -- Support/Resistance
+            high_20d Nullable(Decimal(10, 4)),
+            low_20d Nullable(Decimal(10, 4)),
+            high_52w Nullable(Decimal(10, 4)),
+            low_52w Nullable(Decimal(10, 4)),
+            pct_from_high_20d Nullable(Decimal(10, 4)),
+            pct_from_low_20d Nullable(Decimal(10, 4)),
+            pct_from_high_52w Nullable(Decimal(10, 4)),
+            pct_from_low_52w Nullable(Decimal(10, 4)),
+            
+            -- Volume
+            volume_sma_20 Nullable(UInt64),
+            volume_ratio Nullable(Decimal(10, 4)),
+            obv Nullable(Int64),
+            obv_sma_20 Nullable(Int64),
+            
+            -- ADX
+            adx_14 Nullable(Decimal(10, 4)),
+            plus_di_14 Nullable(Decimal(10, 4)),
+            minus_di_14 Nullable(Decimal(10, 4)),
+            
+            -- Metadata
+            created_at DateTime,
+            updated_at DateTime,
+            calculated_at DateTime
+        )
+        ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (ticker, trade_date)
+        PRIMARY KEY (ticker, trade_date)
+        SETTINGS index_granularity = 8192
+        """
+        
+        client.execute_command(create_tech_indicators_table)
+        logger.info("✅ Created fact_technical_indicators table")
+        
+        # Load fact_technical_indicators from MinIO
+        s3_path_tech = f"{minio_endpoint}/{minio_bucket}/silver/technical_indicators/**/*.parquet"
+        
+        insert_tech = f"""
+        INSERT INTO fact_technical_indicators
+        SELECT *
+        FROM s3(
+            '{s3_path_tech}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        try:
+            client.execute_command(insert_tech)
+            count_tech = client.get_table_count('fact_technical_indicators')
+            logger.info(f"✅ Loaded {count_tech:,} technical indicator records from MinIO")
+        except Exception as e:
+            logger.warning(f"⚠️  No technical indicators found in MinIO (this is OK if first run): {e}")
+        
+        # 4f. Create fact_market_regime table (Gold Layer)
+        logger.info("Creating fact_market_regime table...")
+        
+        create_market_regime_table = f"""
+        CREATE TABLE IF NOT EXISTS fact_market_regime
+        (
+            regime_id Int64,
+            ticker String,
+            trade_date Date,
+            
+            -- Trend Regime
+            trend_regime String,
+            trend_strength Nullable(Float64),
+            trend_signals Nullable(String),
+            
+            -- Volatility Regime
+            volatility_regime String,
+            volatility_percentile Nullable(Float64),
+            volatility_signals Nullable(String),
+            
+            -- Market Phase
+            market_phase String,
+            phase_confidence Nullable(Float64),
+            phase_signals Nullable(String),
+            
+            -- Support/Resistance
+            primary_support Nullable(Float64),
+            primary_resistance Nullable(Float64),
+            support_strength Nullable(Float64),
+            resistance_strength Nullable(Float64),
+            
+            -- Regime Change
+            regime_change Nullable(String),
+            days_in_regime Nullable(Int64),
+            
+            -- Strategy
+            recommended_strategy Nullable(String),
+            strategy_rationale Nullable(String),
+            
+            -- Timestamps
+            calculated_at DateTime,
+            updated_at DateTime
+        )
+        ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (ticker, trade_date)
+        """
+        
+        client.execute_command(create_market_regime_table)
+        logger.info("✅ Created fact_market_regime table")
+        
+        # Load fact_market_regime from MinIO
+        s3_path_regime = f"{minio_endpoint}/{minio_bucket}/gold/market_regime/**/*.parquet"
+        
+        insert_regime = f"""
+        INSERT INTO fact_market_regime
+        SELECT *
+        FROM s3(
+            '{s3_path_regime}',
+            '{minio_access_key}',
+            '{minio_secret_key}',
+            'Parquet'
+        )
+        """
+        
+        try:
+            client.execute_command(insert_regime)
+            count_regime = client.get_table_count('fact_market_regime')
+            logger.info(f"✅ Loaded {count_regime:,} market regime records from MinIO")
+        except Exception as e:
+            logger.warning(f"⚠️  No market regimes found in MinIO (this is OK if first run): {e}")
+        
+        # ===================================================================
+        # 5. Create materialized views for daily aggregations
         # ===================================================================
         logger.info("Creating materialized view for daily aggregations...")
         
@@ -375,12 +598,25 @@ def setup_clickhouse_minio_connection():
         client.optimize_table('fact_option_timeseries')
         client.optimize_table('fact_option_eod')
         client.optimize_table('fact_market_overview')
+        client.optimize_table('bronze_ohlcv')
+        client.optimize_table('fact_technical_indicators')
+        client.optimize_table('fact_market_regime')
         
         # ===================================================================
         # 7. Show table info
         # ===================================================================
         logger.info("\n📊 Table Information:")
-        tables = ['dim_underlying', 'dim_option_contract', 'fact_option_timeseries', 'fact_option_eod', 'fact_market_overview', 'fact_daily_summary_mv']
+        tables = [
+            'dim_underlying', 
+            'dim_option_contract', 
+            'fact_option_timeseries', 
+            'fact_option_eod', 
+            'fact_market_overview',
+            'bronze_ohlcv',
+            'fact_technical_indicators',
+            'fact_market_regime',
+            'fact_daily_summary_mv'
+        ]
         for table in tables:
             if client.table_exists(table):
                 info = client.get_table_info(table)

@@ -18,11 +18,15 @@ Usage:
 """
 
 import sys
-sys.path.insert(0, '/opt/airflow/dags/..')
+import os
+from pathlib import Path
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 import argparse
 import pandas as pd
-from pathlib import Path
 from datetime import date, datetime
 from sqlalchemy import text
 import logging
@@ -367,11 +371,119 @@ def export_gold(trade_date: date, ticker: str) -> int:
             return 0
 
 
+def export_bronze_ohlcv(trade_date: date, ticker: str) -> int:
+    """Export bronze_ohlcv (stock OHLCV data) for a specific date."""
+    logger.info(f"Exporting bronze OHLCV data for {trade_date}, ticker={ticker}")
+    
+    with get_db_session() as session:
+        query = text("""
+            SELECT *
+            FROM bronze_ohlcv
+            WHERE trade_date = :trade_date AND ticker = :ticker
+            ORDER BY trade_date
+        """)
+        
+        df = pd.read_sql(query, session.connection(), params={
+            'trade_date': trade_date,
+            'ticker': ticker
+        })
+        
+        if len(df) > 0:
+            # Write to temp file
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            # Upload to MinIO
+            s3_path = f"bronze/ohlcv/date={trade_date}/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df)} OHLCV records to s3://{minio_client.bucket}/{s3_path}")
+            
+            # Cleanup
+            Path(tmp_path).unlink()
+            return len(df)
+        else:
+            logger.warning(f"No OHLCV data found for {trade_date}, {ticker}")
+            return 0
+
+
+def export_technical_indicators(trade_date: date, ticker: str) -> int:
+    """Export fact_technical_indicators for a specific date."""
+    logger.info(f"Exporting technical indicators for {trade_date}, ticker={ticker}")
+    
+    with get_db_session() as session:
+        query = text("""
+            SELECT *
+            FROM fact_technical_indicators
+            WHERE trade_date = :trade_date AND ticker = :ticker
+            ORDER BY trade_date
+        """)
+        
+        df = pd.read_sql(query, session.connection(), params={
+            'trade_date': trade_date,
+            'ticker': ticker
+        })
+        
+        if len(df) > 0:
+            # Write to temp file
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            # Upload to MinIO
+            s3_path = f"silver/technical_indicators/date={trade_date}/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df)} technical indicator records to s3://{minio_client.bucket}/{s3_path}")
+            
+            # Cleanup
+            Path(tmp_path).unlink()
+            return len(df)
+        else:
+            logger.warning(f"No technical indicators found for {trade_date}, {ticker}")
+            return 0
+
+
+def export_market_regime(trade_date: date, ticker: str) -> int:
+    """Export fact_market_regime for a specific date."""
+    logger.info(f"Exporting market regime for {trade_date}, ticker={ticker}")
+    
+    with get_db_session() as session:
+        query = text("""
+            SELECT *
+            FROM fact_market_regime
+            WHERE trade_date = :trade_date AND ticker = :ticker
+            ORDER BY trade_date
+        """)
+        
+        df = pd.read_sql(query, session.connection(), params={
+            'trade_date': trade_date,
+            'ticker': ticker
+        })
+        
+        if len(df) > 0:
+            # Write to temp file
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                df.to_parquet(tmp.name, index=False, engine='pyarrow')
+                tmp_path = tmp.name
+            
+            # Upload to MinIO
+            s3_path = f"gold/market_regime/date={trade_date}/ticker={ticker}/data.parquet"
+            minio_client.upload_file(tmp_path, s3_path)
+            logger.info(f"✅ Exported {len(df)} market regime records to s3://{minio_client.bucket}/{s3_path}")
+            
+            # Cleanup
+            Path(tmp_path).unlink()
+            return len(df)
+        else:
+            logger.warning(f"No market regime found for {trade_date}, {ticker}")
+            return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Export data to parquet with date partitioning')
     parser.add_argument('--date', type=str, required=True, help='Trade date (YYYY-MM-DD)')
     parser.add_argument('--ticker', type=str, default='AD.AS', help='Ticker symbol')
-    parser.add_argument('--layer', type=str, choices=['bronze', 'silver', 'gold', 'all'], 
+    parser.add_argument('--layer', type=str, choices=['bronze', 'silver', 'gold', 'all', 'ohlcv'], 
                         default='all', help='Which layer to export')
     
     args = parser.parse_args()
@@ -386,18 +498,24 @@ def main():
     
     total_records = 0
     
-    if args.layer in ['bronze', 'all']:
+    if args.layer in ['bronze', 'all', 'ohlcv']:
         logger.info("\n--- Exporting Bronze Layer ---")
-        total_records += export_bronze_bd(trade_date, ticker)
-        total_records += export_bronze_fd(trade_date, ticker)
+        if args.layer != 'ohlcv':
+            total_records += export_bronze_bd(trade_date, ticker)
+            total_records += export_bronze_fd(trade_date, ticker)
+        total_records += export_bronze_ohlcv(trade_date, ticker)
     
-    if args.layer in ['silver', 'all']:
+    if args.layer in ['silver', 'all', 'ohlcv']:
         logger.info("\n--- Exporting Silver Layer ---")
-        total_records += export_silver(trade_date, ticker)
+        if args.layer != 'ohlcv':
+            total_records += export_silver(trade_date, ticker)
+        total_records += export_technical_indicators(trade_date, ticker)
     
-    if args.layer in ['gold', 'all']:
+    if args.layer in ['gold', 'all', 'ohlcv']:
         logger.info("\n--- Exporting Gold Layer ---")
-        total_records += export_gold(trade_date, ticker)
+        if args.layer != 'ohlcv':
+            total_records += export_gold(trade_date, ticker)
+        total_records += export_market_regime(trade_date, ticker)
     
     logger.info("="*60)
     logger.info(f"✅ Export complete! Total records: {total_records}")
