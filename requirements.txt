@@ -18,6 +18,8 @@ beautifulsoup4==4.12.2
 lxml==4.9.4
 requests==2.31.0
 urllib3~=1.26
+selenium==4.16.0
+webdriver-manager==4.0.1
 
 # Data processing
 pandas==2.1.4

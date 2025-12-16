@@ -2,13 +2,15 @@ FROM apache/airflow:2.8.0-python3.10
 
 USER root
 
-# Install system dependencies
+# Install system dependencies including Chromium for Selenium
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     git \
     postgresql-client \
     build-essential \
+    chromium \
+    chromium-driver \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

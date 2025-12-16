@@ -2,6 +2,7 @@
 
 from src.models.base import Base, TimestampMixin
 from src.models import bronze, silver, gold, silver_star
+from src.models.bronze_euronext import BronzeEuronextOptions
 
 __all__ = [
     "Base",
@@ -10,4 +11,5 @@ __all__ = [
     "silver",
     "gold",
     "silver_star",
+    "BronzeEuronextOptions",
 ]
