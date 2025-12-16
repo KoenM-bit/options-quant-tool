@@ -6,6 +6,8 @@
   )
 }}
 
+-- depends_on: {{ ref('dim_option_contract') }}
+
 -- fact_option_timeseries: Intraday pricing from Beursduivel ONLY
 -- This is real-time bid/ask data scraped during trading hours
 

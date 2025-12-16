@@ -436,6 +436,21 @@ def run_dbt_silver(**context):
     
     logger.info("Running DBT Silver transformation (star schema)")
     
+    # First, ensure dbt dependencies are installed
+    logger.info("Installing DBT dependencies...")
+    deps_result = subprocess.run(
+        ['dbt', 'deps', '--profiles-dir', '/opt/airflow/dbt'],
+        cwd='/opt/airflow/dbt/ahold_options',
+        capture_output=True,
+        text=True
+    )
+    
+    if deps_result.returncode != 0:
+        logger.error(f"DBT deps failed:\n{deps_result.stdout}\n{deps_result.stderr}")
+        raise Exception(f"DBT deps failed with return code {deps_result.returncode}")
+    
+    logger.info("DBT dependencies installed successfully")
+    
     # Run dimensions first, then fact table
     result = subprocess.run(
         ['dbt', 'run', '--models', 'tag:silver', '--profiles-dir', '/opt/airflow/dbt'],

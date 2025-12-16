@@ -6,6 +6,8 @@
   )
 }}
 
+-- depends_on: {{ ref('dim_option_contract') }}
+
 -- fact_option_eod: End-of-day settlement data from FD.nl
 -- This is the official closing prices, volume, and open interest from previous trading day
 
