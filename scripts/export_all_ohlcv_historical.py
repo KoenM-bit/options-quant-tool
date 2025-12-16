@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Export all historical OHLCV data (bronze/silver/gold) to MinIO.
+Export all historical OHLCV gold layer (fact_market_regime) to MinIO.
+Only exports aggregated analytics to avoid storing massive amounts of daily raw data.
 """
 
 import sys
@@ -19,7 +20,7 @@ logger = setup_logger(__name__)
 
 
 def get_date_range():
-    """Get min and max trade dates from bronze_ohlcv."""
+    """Get min and max trade dates from fact_market_regime."""
     with get_db_session() as session:
         query = text("""
             SELECT 
@@ -27,18 +28,18 @@ def get_date_range():
                 MAX(trade_date) as max_date,
                 COUNT(DISTINCT trade_date) as total_dates,
                 COUNT(DISTINCT ticker) as total_tickers
-            FROM bronze_ohlcv
+            FROM fact_market_regime
         """)
         result = session.execute(query).fetchone()
         return result
 
 
 def get_all_dates():
-    """Get all unique trade dates from bronze_ohlcv."""
+    """Get all unique trade dates from fact_market_regime."""
     with get_db_session() as session:
         query = text("""
             SELECT DISTINCT trade_date 
-            FROM bronze_ohlcv 
+            FROM fact_market_regime 
             ORDER BY trade_date
         """)
         result = session.execute(query).fetchall()
@@ -46,7 +47,7 @@ def get_all_dates():
 
 
 def export_date(trade_date, ticker='AD.AS'):
-    """Export OHLCV data for a specific date using the export script."""
+    """Export gold layer (market regime) for a specific date."""
     import subprocess
     
     date_str = trade_date.strftime('%Y-%m-%d')
@@ -55,7 +56,7 @@ def export_date(trade_date, ticker='AD.AS'):
         str(project_root / 'scripts' / 'export_parquet_simple.py'),
         '--date', date_str,
         '--ticker', ticker,
-        '--layer', 'ohlcv'  # Only export OHLCV layers (bronze/silver/gold)
+        '--layer', 'gold'  # Only export gold layer (fact_market_regime)
     ]
     
     logger.info(f"Exporting {date_str}...")
@@ -74,7 +75,8 @@ def export_date(trade_date, ticker='AD.AS'):
 
 def main():
     logger.info("="*60)
-    logger.info("Starting historical OHLCV export to MinIO")
+    logger.info("Starting historical OHLCV Gold Layer export to MinIO")
+    logger.info("Only exporting fact_market_regime (aggregated analytics)")
     logger.info("="*60)
     
     # Get date range
@@ -86,7 +88,7 @@ def main():
     
     # Get all dates
     dates = get_all_dates()
-    logger.info(f"\n📅 Exporting {len(dates)} dates...")
+    logger.info(f"\n📅 Exporting {len(dates)} dates (gold layer only)...")
     
     # Export each date
     success_count = 0

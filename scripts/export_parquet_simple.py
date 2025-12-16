@@ -110,13 +110,36 @@ def export_bronze_bd(trade_date: date, ticker: str) -> int:
 
 
 def export_bronze_fd(trade_date: date, ticker: str) -> int:
-    """Export bronze_fd_options and bronze_fd_overview for a specific date."""
+    """Export bronze_fd_options and bronze_fd_overview for a specific date.
+    
+    Note: FD data is published with 1-day delay. If no data exists for the requested date,
+    we'll export the latest available data instead (typically previous day).
+    """
     logger.info(f"Exporting bronze FD data for {trade_date}, ticker={ticker}")
     
     total_records = 0
     
     with get_db_session() as session:
-        # Export options (use trade_date column)
+        # First check if data exists for requested date, otherwise get latest
+        check_query = text("""
+            SELECT MAX(trade_date) as latest_date
+            FROM bronze_fd_options
+            WHERE ticker = :ticker
+              AND trade_date <= :trade_date
+        """)
+        
+        result = session.execute(check_query, {'ticker': ticker, 'trade_date': trade_date}).fetchone()
+        actual_date = result[0] if result and result[0] else None
+        
+        if actual_date and actual_date != trade_date:
+            logger.info(f"📅 No FD data for {trade_date}, using latest available: {actual_date}")
+        elif not actual_date:
+            logger.warning(f"No FD data found for {ticker} up to {trade_date}")
+            return 0
+        else:
+            actual_date = trade_date
+        
+        # Export options (use actual available date)
         options_query = text("""
             SELECT *
             FROM bronze_fd_options
@@ -126,7 +149,7 @@ def export_bronze_fd(trade_date: date, ticker: str) -> int:
         """)
         
         df_options = pd.read_sql(options_query, session.connection(), params={
-            'trade_date': trade_date,
+            'trade_date': actual_date,
             'ticker': ticker
         })
         
@@ -136,8 +159,8 @@ def export_bronze_fd(trade_date: date, ticker: str) -> int:
                 df_options.to_parquet(tmp.name, index=False, engine='pyarrow')
                 tmp_path = tmp.name
             
-            # Upload to MinIO
-            s3_path = f"bronze/fd_options/date={trade_date}/ticker={ticker}/data.parquet"
+            # Upload to MinIO - use actual_date for partitioning
+            s3_path = f"bronze/fd_options/date={actual_date}/ticker={ticker}/data.parquet"
             minio_client.upload_file(tmp_path, s3_path)
             logger.info(f"✅ Exported {len(df_options)} FD option records to s3://{minio_client.bucket}/{s3_path}")
             
@@ -154,7 +177,7 @@ def export_bronze_fd(trade_date: date, ticker: str) -> int:
         """)
         
         df_overview = pd.read_sql(overview_query, session.connection(), params={
-            'trade_date': trade_date,
+            'trade_date': actual_date,
             'ticker': ticker
         })
         
@@ -164,8 +187,8 @@ def export_bronze_fd(trade_date: date, ticker: str) -> int:
                 df_overview.to_parquet(tmp.name, index=False, engine='pyarrow')
                 tmp_path = tmp.name
             
-            # Upload to MinIO
-            s3_path = f"bronze/fd_overview/date={trade_date}/ticker={ticker}/data.parquet"
+            # Upload to MinIO - use actual_date for partitioning
+            s3_path = f"bronze/fd_overview/date={actual_date}/ticker={ticker}/data.parquet"
             minio_client.upload_file(tmp_path, s3_path)
             logger.info(f"✅ Exported {len(df_overview)} FD overview records to s3://{minio_client.bucket}/{s3_path}")
             
@@ -264,59 +287,93 @@ def export_silver(trade_date: date, ticker: str) -> int:
             logger.warning(f"No fact_option_timeseries data found for {trade_date}, {ticker}")
         
         # 4. Export fact_option_eod (partitioned by date)
+        # Note: FD data may lag by 1 day, export latest available
         logger.info("Exporting fact_option_eod...")
-        query_eod = text("""
-            SELECT e.*
+        
+        # Check for latest available EOD data
+        check_eod = text("""
+            SELECT MAX(e.trade_date) as latest_date
             FROM fact_option_eod e
             JOIN dim_option_contract c ON e.option_id = c.option_id
-            WHERE e.trade_date = :trade_date AND c.ticker = :ticker
-            ORDER BY e.ts
+            WHERE c.ticker = :ticker AND e.trade_date <= :trade_date
         """)
         
-        df_eod = pd.read_sql(query_eod, session.connection(), params={
-            'trade_date': trade_date,
-            'ticker': ticker
-        })
+        result_eod = session.execute(check_eod, {'ticker': ticker, 'trade_date': trade_date}).fetchone()
+        actual_eod_date = result_eod[0] if result_eod and result_eod[0] else None
         
-        if len(df_eod) > 0:
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
-                df_eod.to_parquet(tmp.name, index=False, engine='pyarrow')
-                tmp_path = tmp.name
+        if actual_eod_date and actual_eod_date != trade_date:
+            logger.info(f"📅 No EOD data for {trade_date}, using latest available: {actual_eod_date}")
+        
+        if actual_eod_date:
+            query_eod = text("""
+                SELECT e.*
+                FROM fact_option_eod e
+                JOIN dim_option_contract c ON e.option_id = c.option_id
+                WHERE e.trade_date = :trade_date AND c.ticker = :ticker
+                ORDER BY e.ts
+            """)
             
-            s3_path = f"silver/fact_option_eod/date={trade_date}/ticker={ticker}/data.parquet"
-            minio_client.upload_file(tmp_path, s3_path)
-            logger.info(f"✅ Exported {len(df_eod)} fact_option_eod records to s3://{minio_client.bucket}/{s3_path}")
-            Path(tmp_path).unlink()
-            total_records += len(df_eod)
+            df_eod = pd.read_sql(query_eod, session.connection(), params={
+                'trade_date': actual_eod_date,
+                'ticker': ticker
+            })
+            
+            if len(df_eod) > 0:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                    df_eod.to_parquet(tmp.name, index=False, engine='pyarrow')
+                    tmp_path = tmp.name
+                
+                s3_path = f"silver/fact_option_eod/date={actual_eod_date}/ticker={ticker}/data.parquet"
+                minio_client.upload_file(tmp_path, s3_path)
+                logger.info(f"✅ Exported {len(df_eod)} fact_option_eod records to s3://{minio_client.bucket}/{s3_path}")
+                Path(tmp_path).unlink()
+                total_records += len(df_eod)
         else:
-            logger.warning(f"No fact_option_eod data found for {trade_date}, {ticker}")
+            logger.warning(f"No fact_option_eod data found for {ticker} up to {trade_date}")
         
         # 5. Export fact_market_overview (partitioned by date)
+        # Note: Market overview also lags by 1 day, export latest available
         logger.info("Exporting fact_market_overview...")
-        query_overview = text("""
-            SELECT o.*
+        
+        # Check for latest available market overview data
+        check_overview = text("""
+            SELECT MAX(o.trade_date) as latest_date
+            FROM fact_market_overview o
+            JOIN dim_underlying u ON o.underlying_id = u.underlying_id
+            WHERE u.ticker = :ticker AND o.trade_date <= :trade_date
+        """)
+        
+        result_overview = session.execute(check_overview, {'ticker': ticker, 'trade_date': trade_date}).fetchone()
+        actual_overview_date = result_overview[0] if result_overview and result_overview[0] else None
+        
+        if actual_overview_date and actual_overview_date != trade_date:
+            logger.info(f"📅 No market overview for {trade_date}, using latest available: {actual_overview_date}")
+        
+        if actual_overview_date:
+            query_overview = text("""
+                SELECT o.*
             FROM fact_market_overview o
             JOIN dim_underlying u ON o.underlying_id = u.underlying_id
             WHERE o.trade_date = :trade_date AND u.ticker = :ticker
         """)
         
-        df_overview = pd.read_sql(query_overview, session.connection(), params={
-            'trade_date': trade_date,
-            'ticker': ticker
-        })
-        
-        if len(df_overview) > 0:
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
-                df_overview.to_parquet(tmp.name, index=False, engine='pyarrow')
-                tmp_path = tmp.name
+            df_overview = pd.read_sql(query_overview, session.connection(), params={
+                'trade_date': actual_overview_date,
+                'ticker': ticker
+            })
             
-            s3_path = f"silver/fact_market_overview/date={trade_date}/ticker={ticker}/data.parquet"
-            minio_client.upload_file(tmp_path, s3_path)
-            logger.info(f"✅ Exported {len(df_overview)} fact_market_overview records to s3://{minio_client.bucket}/{s3_path}")
-            Path(tmp_path).unlink()
-            total_records += len(df_overview)
+            if len(df_overview) > 0:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.parquet', delete=False) as tmp:
+                    df_overview.to_parquet(tmp.name, index=False, engine='pyarrow')
+                    tmp_path = tmp.name
+                
+                s3_path = f"silver/fact_market_overview/date={actual_overview_date}/ticker={ticker}/data.parquet"
+                minio_client.upload_file(tmp_path, s3_path)
+                logger.info(f"✅ Exported {len(df_overview)} fact_market_overview records to s3://{minio_client.bucket}/{s3_path}")
+                Path(tmp_path).unlink()
+                total_records += len(df_overview)
         else:
-            logger.warning(f"No fact_market_overview data found for {trade_date}, {ticker}")
+            logger.warning(f"No fact_market_overview data found for {ticker} up to {trade_date}")
         
         logger.info(f"✅ Total silver star schema records exported: {total_records}")
         return total_records
@@ -408,10 +465,32 @@ def export_bronze_ohlcv(trade_date: date, ticker: str) -> int:
 
 
 def export_technical_indicators(trade_date: date, ticker: str) -> int:
-    """Export fact_technical_indicators for a specific date."""
+    """Export fact_technical_indicators for a specific date.
+    
+    Note: Technical indicators may lag if OHLCV data isn't available yet.
+    Will export latest available data if requested date doesn't exist.
+    """
     logger.info(f"Exporting technical indicators for {trade_date}, ticker={ticker}")
     
     with get_db_session() as session:
+        # Check for latest available technical indicators
+        check_query = text("""
+            SELECT MAX(trade_date) as latest_date
+            FROM fact_technical_indicators
+            WHERE ticker = :ticker AND trade_date <= :trade_date
+        """)
+        
+        result = session.execute(check_query, {'ticker': ticker, 'trade_date': trade_date}).fetchone()
+        actual_date = result[0] if result and result[0] else None
+        
+        if actual_date and actual_date != trade_date:
+            logger.info(f"📅 No technical indicators for {trade_date}, using latest available: {actual_date}")
+        elif not actual_date:
+            logger.warning(f"No technical indicators found for {ticker} up to {trade_date}")
+            return 0
+        else:
+            actual_date = trade_date
+        
         query = text("""
             SELECT *
             FROM fact_technical_indicators
@@ -420,7 +499,7 @@ def export_technical_indicators(trade_date: date, ticker: str) -> int:
         """)
         
         df = pd.read_sql(query, session.connection(), params={
-            'trade_date': trade_date,
+            'trade_date': actual_date,
             'ticker': ticker
         })
         
@@ -430,8 +509,8 @@ def export_technical_indicators(trade_date: date, ticker: str) -> int:
                 df.to_parquet(tmp.name, index=False, engine='pyarrow')
                 tmp_path = tmp.name
             
-            # Upload to MinIO
-            s3_path = f"silver/technical_indicators/date={trade_date}/ticker={ticker}/data.parquet"
+            # Upload to MinIO - use actual_date for partitioning
+            s3_path = f"silver/technical_indicators/date={actual_date}/ticker={ticker}/data.parquet"
             minio_client.upload_file(tmp_path, s3_path)
             logger.info(f"✅ Exported {len(df)} technical indicator records to s3://{minio_client.bucket}/{s3_path}")
             
@@ -439,7 +518,7 @@ def export_technical_indicators(trade_date: date, ticker: str) -> int:
             Path(tmp_path).unlink()
             return len(df)
         else:
-            logger.warning(f"No technical indicators found for {trade_date}, {ticker}")
+            logger.warning(f"No technical indicators found for {actual_date}, {ticker}")
             return 0
 
 

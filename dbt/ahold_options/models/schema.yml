@@ -100,3 +100,110 @@ sources:
             description: Bid price
           - name: ask
             description: Ask price
+
+      - name: fact_technical_indicators
+        description: Technical indicators table (created by Python script)
+        columns:
+          - name: ticker
+            description: Stock ticker symbol
+            tests:
+              - not_null
+          - name: trade_date
+            description: Trading day
+            tests:
+              - not_null
+
+models:
+  - name: fact_event_features
+    description: Event-based features derived from earnings, dividends, OPEX, and calendar effects
+    columns:
+      - name: ticker
+        description: Stock ticker symbol
+        tests:
+          - not_null
+      - name: trade_date
+        description: Trading day
+        tests:
+          - not_null
+      
+      # Earnings features
+      - name: days_to_earnings
+        description: Days until next earnings (clamped at 90)
+      - name: days_since_earnings
+        description: Days since previous earnings
+      - name: is_earnings_week
+        description: Binary flag - within 5 days of earnings
+      - name: is_earnings_tomorrow
+        description: Binary flag - earnings tomorrow
+      - name: is_earnings_today
+        description: Binary flag - earnings today
+      - name: is_post_earnings_1d
+        description: Binary flag - 1 day after earnings
+      - name: is_post_earnings_5d
+        description: Binary flag - within 5 days after earnings
+      - name: next_earnings_quarter
+        description: Quarter of next earnings (Q1, Q2, Q3, Q4)
+      - name: earnings_q1
+        description: Binary flag - next earnings is Q1
+      - name: earnings_q2
+        description: Binary flag - next earnings is Q2
+      - name: earnings_q3
+        description: Binary flag - next earnings is Q3
+      - name: earnings_q4
+        description: Binary flag - next earnings is Q4
+      
+      # Dividend features
+      - name: days_to_exdiv
+        description: Days until next ex-dividend date (clamped at 90)
+      - name: days_since_exdiv
+        description: Days since previous ex-dividend date
+      - name: is_exdiv_week
+        description: Binary flag - within 5 days of ex-dividend
+      - name: is_exdiv_tomorrow
+        description: Binary flag - ex-dividend tomorrow
+      - name: is_exdiv_today
+        description: Binary flag - ex-dividend today
+      - name: is_post_exdiv_1d
+        description: Binary flag - 1 day after ex-dividend
+      - name: next_div_amount
+        description: Amount of next dividend
+      - name: next_div_type
+        description: Type of next dividend (interim, final)
+      - name: is_dividend_interim
+        description: Binary flag - next dividend is interim
+      - name: is_dividend_final
+        description: Binary flag - next dividend is final
+      - name: div_yield_annual
+        description: Annualized dividend yield (assumes 2 divs/year)
+      - name: div_as_atr
+        description: Dividend as fraction of ATR (impact measure)
+      
+      # OPEX features
+      - name: days_to_opex
+        description: Days until next OPEX (3rd Friday)
+      - name: is_opex_week
+        description: Binary flag - within 5 days of OPEX
+      - name: is_opex_friday
+        description: Binary flag - OPEX day (3rd Friday)
+      - name: is_post_opex_week
+        description: Binary flag - within 5 days after OPEX
+      
+      # Calendar features
+      - name: days_to_month_end
+        description: Days until end of month
+      - name: days_to_quarter_end
+        description: Days until end of quarter
+      - name: is_month_end_week
+        description: Binary flag - within 5 days of month end
+      - name: is_quarter_end_week
+        description: Binary flag - within 5 days of quarter end
+      - name: quarter
+        description: Calendar quarter (1-4)
+      
+      # Interaction features
+      - name: earnings_week_x_atr
+        description: ATR value during earnings week (0 otherwise)
+      - name: opex_week_x_adx
+        description: ADX value during OPEX week (0 otherwise)
+      - name: earnings_week_x_rv
+        description: Realized volatility during earnings week (0 otherwise)

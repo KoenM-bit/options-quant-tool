@@ -53,7 +53,11 @@ deduplicated AS (
 )
 
 SELECT
-    ROW_NUMBER() OVER (ORDER BY d.trade_date, d.ticker, d.expiry_date, d.strike, d.call_put) as eod_id,
+    {% if is_incremental() %}
+        (SELECT COALESCE(MAX(eod_id), 0) FROM {{ this }}) + ROW_NUMBER() OVER (ORDER BY d.trade_date, d.ticker, d.expiry_date, d.strike, d.call_put) as eod_id,
+    {% else %}
+        ROW_NUMBER() OVER (ORDER BY d.trade_date, d.ticker, d.expiry_date, d.strike, d.call_put) as eod_id,
+    {% endif %}
     d.trade_date,
     CURRENT_TIMESTAMP as ts,
     MD5(d.ticker || d.expiry_date::TEXT || d.strike::TEXT || d.call_put) as option_id,
