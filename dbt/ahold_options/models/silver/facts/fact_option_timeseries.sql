@@ -46,8 +46,18 @@ WITH bronze_data AS (
     {% endif %}
 )
 
+{% if is_incremental() %}
+, max_ts_id AS (
+    SELECT COALESCE(MAX(ts_id), 0) as max_id FROM {{ this }}
+)
+{% endif %}
+
 SELECT
+    {% if is_incremental() %}
+    ROW_NUMBER() OVER (ORDER BY b.trade_date, b.ticker, b.expiry_date, b.strike, b.call_put) + (SELECT max_id FROM max_ts_id) as ts_id,
+    {% else %}
     ROW_NUMBER() OVER (ORDER BY b.trade_date, b.ticker, b.expiry_date, b.strike, b.call_put) as ts_id,
+    {% endif %}
     b.trade_date,
     CURRENT_TIMESTAMP as ts,
     MD5(b.ticker || b.expiry_date::TEXT || b.strike::TEXT || b.call_put) as option_id,

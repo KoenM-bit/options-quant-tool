@@ -64,8 +64,8 @@ underlying_dim AS (
 )
 
 SELECT
-    -- Generate surrogate key
-    {{ dbt_utils.generate_surrogate_key(['u.underlying_id', 'o.trade_date']) }} AS overview_id,
+    -- Generate surrogate key using MD5 hash
+    MD5(u.underlying_id || '_' || o.trade_date::TEXT) AS overview_id,
     
     -- Dimensions
     o.trade_date,
