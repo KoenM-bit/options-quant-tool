@@ -63,9 +63,6 @@ underlying_dim AS (
 )
 
 SELECT
-    -- Generate surrogate key using MD5 hash
-    MD5(u.underlying_id || '_' || o.trade_date::TEXT) AS overview_id,
-    
     -- Dimensions
     o.trade_date,
     u.underlying_id,
