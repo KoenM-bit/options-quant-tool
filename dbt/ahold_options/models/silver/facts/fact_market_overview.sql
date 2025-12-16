@@ -58,8 +58,7 @@ latest_overview AS (
 underlying_dim AS (
     SELECT 
         underlying_id,
-        ticker,
-        symbol_code
+        ticker
     FROM {{ ref('dim_underlying') }}
 )
 
@@ -110,5 +109,4 @@ SELECT
 
 FROM latest_overview o
 INNER JOIN underlying_dim u
-    ON o.ticker = u.ticker 
-    AND o.symbol_code = u.symbol_code
+    ON o.ticker = u.ticker
