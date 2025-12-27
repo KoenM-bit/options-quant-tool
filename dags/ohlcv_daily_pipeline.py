@@ -55,11 +55,13 @@ def fetch_daily_ohlcv(**context):
     from scripts.backfill_ohlcv_direct import OHLCVBackfill
     
     # Get execution date from context
+    # Note: execution_date is the START of the data interval, not the actual run time
+    # When DAG runs at 19:00 on Dec 18th, execution_date is Dec 17th 19:00
+    # We need to add 1 day to get the actual trading day we're fetching
     execution_date = context['execution_date']
     
-    # For scheduled runs after market close, we want today's data
-    # execution_date is in UTC, convert to CET
-    target_date = execution_date.date()
+    # Add 1 day to execution_date to get the actual trading day
+    target_date = (execution_date + timedelta(days=1)).date()
     
     # If it's a weekend, skip (shouldn't happen with schedule, but safety check)
     if target_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
@@ -149,10 +151,11 @@ def calculate_indicators(**context):
     sys.path.insert(0, str(project_root))
     
     from scripts.calculate_technical_indicators import TechnicalIndicatorCalculator
+    from datetime import timedelta
     
-    # Get execution date
+    # Get execution date and add 1 day (same as fetch_daily_ohlcv)
     execution_date = context['execution_date']
-    target_date = execution_date.date()
+    target_date = (execution_date + timedelta(days=1)).date()
     
     logger.info(f"📊 Calculating technical indicators for {target_date}")
     
@@ -211,10 +214,11 @@ def validate_data(**context):
     
     from sqlalchemy import create_engine, text
     from src.config import settings
+    from datetime import timedelta
     
-    # Get execution date
+    # Get execution date and add 1 day (same as fetch_daily_ohlcv)
     execution_date = context['execution_date']
-    target_date = execution_date.date()
+    target_date = (execution_date + timedelta(days=1)).date()
     
     logger.info(f"🔍 Validating OHLCV data for {target_date}")
     
@@ -310,10 +314,11 @@ def calculate_regimes(**context):
     sys.path.insert(0, str(project_root))
     
     from scripts.calculate_market_regimes import MarketRegimeCalculator
+    from datetime import timedelta
     
-    # Get execution date
+    # Get execution date and add 1 day (same as fetch_daily_ohlcv)
     execution_date = context['execution_date']
-    target_date = execution_date.date()
+    target_date = (execution_date + timedelta(days=1)).date()
     
     logger.info(f"📊 Calculating market regimes for {target_date}")
     
@@ -376,10 +381,11 @@ def export_to_minio(**context):
         export_technical_indicators,
         export_market_regime
     )
+    from datetime import timedelta
     
-    # Get execution date
+    # Get execution date and add 1 day (same as fetch_daily_ohlcv)
     execution_date = context['execution_date']
-    target_date = execution_date.date()
+    target_date = (execution_date + timedelta(days=1)).date()
     
     logger.info(f"📤 Exporting data to MinIO for {target_date}")
     

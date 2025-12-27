@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""
+Slippage sensitivity analysis with calibrated probabilities and directional slippage (ENTRY + EXIT).
+
+Realistic slippage model:
+- LONG entry: pay MORE  -> open * (1 + slip)
+- LONG exit:  receive LESS -> exit * (1 - slip)
+- SHORT entry: receive LESS -> open * (1 - slip)
+- SHORT exit:  pay MORE -> exit * (1 + slip)
+
+Also supports calibrated probabilities if bundle contains a calibrator.
+
+Usage:
+    python scripts/validate_slippage_curve.py \
+        --bundle ML/production/v20251223_212702 \
+        --events data/ml_datasets/accum_distrib_events.parquet \
+        --market US \
+        --threshold 0.75 \
+        --cost_bps 10 \
+        --slippages 0,2,5,10,15,20 \
+        --output data/backtests/validation/slippage_curve_us_t075.csv
+"""
+
+import sys
+from pathlib import Path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+import argparse
+import json
+import logging
+import numpy as np
+import pandas as pd
+import joblib
+from sqlalchemy import create_engine, text
+
+from src.config import settings
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+
+def load_events(events_path: str, market: str = None) -> pd.DataFrame:
+    ev = pd.read_parquet(events_path)
+    ev["t_end"] = pd.to_datetime(ev["t_end"])
+    ev["t_start"] = pd.to_datetime(ev["t_start"])
+
+    if "label_valid" in ev.columns:
+        ev = ev[ev["label_valid"] == True].copy()
+
+    if market:
+        ev = ev[ev["market"] == market].copy()
+
+    return ev
+
+
+def get_prices(engine, tickers, start_ts, end_ts, market=None):
+    q = """
+    SELECT ticker, market, timestamp, open, high, low, close, volume
+    FROM bronze_ohlcv_intraday
+    WHERE timestamp >= :start_ts AND timestamp <= :end_ts
+      AND ticker = ANY(:tickers)
+    """
+    params = {"start_ts": start_ts, "end_ts": end_ts, "tickers": list(tickers)}
+
+    if market:
+        q += " AND market = :market"
+        params["market"] = market
+
+    q += " ORDER BY market, ticker, timestamp"
+    return pd.read_sql(text(q), engine, params=params)
+
+
+def load_bundle(bundle_dir: str):
+    """
+    Load features.json + calibrated model bundle (model + optional calibrator).
+    Returns: feature_names, model, calibrator (or None)
+    """
+    bundle_dir = Path(bundle_dir)
+
+    features_data = json.loads((bundle_dir / "features.json").read_text())
+    if isinstance(features_data, dict) and "feature_names" in features_data:
+        feature_names = features_data["feature_names"]
+    elif isinstance(features_data, list):
+        feature_names = [f["name"] for f in features_data]
+    else:
+        raise ValueError("Unexpected features.json format")
+
+    # Prefer calibrated bundle
+    model_file = bundle_dir / "model_calibrated.pkl"
+    if not model_file.exists():
+        model_file = bundle_dir / "model.pkl"
+
+    model_bundle = joblib.load(model_file)
+
+    model = None
+    calibrator = None
+
+    if isinstance(model_bundle, dict) and "model" in model_bundle:
+        model = model_bundle["model"]
+        calibrator = model_bundle.get("calibrator", None)
+    else:
+        model = model_bundle
+        calibrator = None
+
+    logger.info(f"Loaded bundle: features={len(feature_names)}, calibrated={calibrator is not None}")
+    return feature_names, model, calibrator
+
+
+def predict_p_up(model, calibrator, X):
+    """
+    Predict calibrated P(UP) if calibrator exists, else raw.
+    """
+    p_uncal = model.predict_proba(X)[:, 1]
+    if calibrator is None:
+        return float(p_uncal[0])
+
+    # Isotonic regression expects 2D
+    p_cal = calibrator.predict(p_uncal.reshape(-1, 1))
+    return float(p_cal[0])
+
+
+# ---------------------------------------------------------------------
+# Backtest with slippage
+# ---------------------------------------------------------------------
+
+def backtest_with_slippage(
+    events: pd.DataFrame,
+    prices: pd.DataFrame,
+    model,
+    calibrator,
+    feature_names: list,
+    threshold: float,
+    cost_bps: float,
+    slip_bps: float,
+    H: int = 40,
+    ATR_K: float = 1.5,
+) -> dict:
+    """
+    Backtest applying:
+    - entry at t_end + 1 bar OPEN
+    - directional slippage on ENTRY + EXIT
+    - hybrid barrier exit + time stop
+    - round-trip fixed transaction costs
+
+    slip_bps is applied adversarially to both entry and exit.
+    """
+
+    prices["timestamp"] = pd.to_datetime(prices["timestamp"])
+    prices = prices.sort_values(["ticker", "timestamp"])
+    by_ticker = {t: g.set_index("timestamp") for t, g in prices.groupby("ticker")}
+
+    trades = []
+    cost_fraction = cost_bps / 10000.0
+    slip_fraction = slip_bps / 10000.0
+
+    for _, ev in events.iterrows():
+        tkr = ev["ticker"]
+        if tkr not in by_ticker:
+            continue
+
+        t_end = pd.to_datetime(ev["t_end"])
+        entry_ts = t_end + pd.Timedelta(hours=1)
+
+        g = by_ticker[tkr]
+        if entry_ts not in g.index:
+            continue
+
+        entry_bar = g.loc[entry_ts]
+        open_px = float(entry_bar["open"])
+        if not np.isfinite(open_px) or open_px <= 0:
+            continue
+
+        # Build feature vector in correct order
+        try:
+            X = ev[feature_names].to_frame().T.astype(float).fillna(0.0)
+        except KeyError:
+            continue
+
+        # Predict calibrated probability
+        p_up = predict_p_up(model, calibrator, X)
+
+        # Threshold logic (symmetrical long/short/no-trade)
+        if p_up >= threshold:
+            side = "LONG"
+        elif p_up <= (1 - threshold):
+            side = "SHORT"
+        else:
+            continue
+
+        # Apply adverse ENTRY slippage
+        if side == "LONG":
+            entry_px = open_px * (1 + slip_fraction)
+        else:
+            entry_px = open_px * (1 - slip_fraction)
+
+        # Price path after entry (H bars)
+        path = g.loc[entry_ts:].iloc[: H + 1]
+        if len(path) < 2:
+            continue
+
+        # ATR from event (percent of price)
+        atr_pct = float(ev.get("atr_pct_last", np.nan))
+        if not np.isfinite(atr_pct) or atr_pct <= 0:
+            continue
+
+        atr_end = atr_pct * entry_px
+
+        # Stop and target
+        if side == "LONG":
+            stop = entry_px - ATR_K * atr_end
+            target = entry_px + ATR_K * atr_end
+        else:
+            stop = entry_px + ATR_K * atr_end
+            target = entry_px - ATR_K * atr_end
+
+        # Barrier exits
+        exit_ts = None
+        exit_px = None
+        exit_reason = None
+
+        for ts, row in path.iterrows():
+            if ts == entry_ts:
+                continue
+
+            hi = float(row["high"])
+            lo = float(row["low"])
+
+            if side == "LONG":
+                hit_target = hi >= target
+                hit_stop = lo <= stop
+            else:
+                hit_target = lo <= target
+                hit_stop = hi >= stop
+
+            # Worst-case if both hit same bar
+            if hit_target and hit_stop:
+                exit_ts, exit_px, exit_reason = ts, stop, "BOTH_WORST"
+                break
+            elif hit_target:
+                exit_ts, exit_px, exit_reason = ts, target, "TARGET"
+                break
+            elif hit_stop:
+                exit_ts, exit_px, exit_reason = ts, stop, "STOP"
+                break
+
+        # Time exit
+        if exit_ts is None:
+            exit_ts = path.index[-1]
+            exit_px = float(path.iloc[-1]["close"])
+            exit_reason = "TIME"
+
+        # Apply adverse EXIT slippage
+        if side == "LONG":
+            exit_fill = exit_px * (1 - slip_fraction)   # receive LESS
+        else:
+            exit_fill = exit_px * (1 + slip_fraction)   # pay MORE
+
+        # Returns
+        if side == "LONG":
+            gross_ret = (exit_fill - entry_px) / entry_px
+        else:
+            gross_ret = (entry_px - exit_fill) / entry_px
+
+        net_ret = gross_ret - 2 * cost_fraction
+
+        trades.append({
+            "entry_ts": entry_ts,
+            "exit_ts": exit_ts,
+            "side": side,
+            "p_up": p_up,
+            "net_ret": net_ret,
+            "exit_reason": exit_reason
+        })
+
+    # Metrics
+    if len(trades) == 0:
+        return dict(
+            slip_bps=slip_bps,
+            n_trades=0,
+            win_rate=0,
+            avg_ret=0,
+            median_ret=0,
+            std_ret=0,
+            total_ret=0,
+            max_dd=0,
+            sharpe=0,
+        )
+
+    trades_df = pd.DataFrame(trades).sort_values("entry_ts")
+
+    win_rate = (trades_df["net_ret"] > 0).mean()
+    avg_ret = trades_df["net_ret"].mean()
+    med_ret = trades_df["net_ret"].median()
+    std_ret = trades_df["net_ret"].std()
+
+    # Equity curve + DD
+    eq = (1 + trades_df["net_ret"]).cumprod()
+    peak = eq.cummax()
+    dd = (eq / peak) - 1
+    max_dd = float(dd.min())
+    total_ret = float(eq.iloc[-1] - 1)
+
+    # Sharpe annualized based on trades/year (same method as main backtest)
+    sharpe = 0.0
+    if std_ret > 0 and len(trades_df) > 1:
+        date_range_days = (trades_df["entry_ts"].max() - trades_df["entry_ts"].min()).days
+        if date_range_days > 0:
+            trades_per_year = len(trades_df) * 365.25 / date_range_days
+            sharpe = (avg_ret / std_ret) * np.sqrt(trades_per_year)
+
+    return dict(
+        slip_bps=float(slip_bps),
+        n_trades=int(len(trades_df)),
+        win_rate=float(win_rate),
+        avg_ret=float(avg_ret),
+        median_ret=float(med_ret),
+        std_ret=float(std_ret),
+        total_ret=float(total_ret),
+        max_dd=float(max_dd),
+        sharpe=float(sharpe),
+    )
+
+
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Slippage sensitivity analysis (realistic)")
+    ap.add_argument("--bundle", required=True, help="Production bundle directory")
+    ap.add_argument("--events", required=True, help="Events parquet file")
+    ap.add_argument("--market", default=None, help="Market filter (US or NL)")
+    ap.add_argument("--threshold", type=float, default=0.75, help="Decision threshold")
+    ap.add_argument("--cost_bps", type=float, default=10.0, help="Round-trip transaction costs (bps)")
+    ap.add_argument("--slippages", default="0,2,5,10,15,20", help="Comma-separated slippage values (bps)")
+    ap.add_argument("--output", required=True, help="Output CSV path")
+    args = ap.parse_args()
+
+    slippages = [float(x) for x in args.slippages.split(",")]
+
+    logger.info(f"Slippage curve analysis: market={args.market}, threshold={args.threshold}, cost={args.cost_bps}bps")
+    logger.info(f"Slippages tested: {slippages} bps")
+
+    # Load bundle + model/calibrator
+    feature_names, model, calibrator = load_bundle(args.bundle)
+
+    # Load events
+    events = load_events(args.events, args.market)
+    logger.info(f"Loaded {len(events):,} events")
+
+    # Load prices
+    engine = create_engine(settings.database_url)
+    tickers = events["ticker"].unique()
+    price_start = events["t_end"].min() - pd.Timedelta(days=2)
+    price_end = events["t_end"].max() + pd.Timedelta(hours=60)
+
+    logger.info(f"Fetching prices for {len(tickers)} tickers...")
+    prices = get_prices(engine, tickers, price_start, price_end, args.market)
+    logger.info(f"Loaded {len(prices):,} price bars")
+
+    # Run curve
+    results = []
+    for slip in slippages:
+        logger.info(f"\n{'='*70}")
+        logger.info(f"Testing slip={slip:.1f} bps")
+        logger.info(f"{'='*70}")
+
+        metrics = backtest_with_slippage(
+            events=events,
+            prices=prices,
+            model=model,
+            calibrator=calibrator,
+            feature_names=feature_names,
+            threshold=args.threshold,
+            cost_bps=args.cost_bps,
+            slip_bps=slip,
+        )
+
+        results.append(metrics)
+
+        logger.info(
+            f"Slip {slip:.1f}bps -> trades={metrics['n_trades']}, "
+            f"WR={metrics['win_rate']:.1%}, avg={metrics['avg_ret']:.3%}, "
+            f"Sharpe={metrics['sharpe']:.2f}, DD={metrics['max_dd']:.1%}"
+        )
+
+    results_df = pd.DataFrame(results)
+
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    results_df.to_csv(out, index=False)
+    logger.info(f"\nSaved results: {out}")
+
+    # -----------------------------------------------------------------
+    # Reporting
+    # -----------------------------------------------------------------
+    print("\n" + "="*78)
+    print("SLIPPAGE SENSITIVITY ANALYSIS (ENTRY + EXIT SLIPPAGE, CALIBRATED)")
+    print("="*78)
+
+    print(f"\n{'Slip(bps)':<10} {'Trades':<8} {'WR':<8} {'AvgRet':<12} {'Sharpe':<8} {'MaxDD':<10}")
+    print("-"*78)
+
+    baseline = results_df.iloc[0]
+    for _, row in results_df.iterrows():
+        slip = row["slip_bps"]
+        avg_ret = row["avg_ret"]
+        sharpe = row["sharpe"]
+
+        if slip == 0:
+            avg_str = f"{avg_ret:.3%}"
+            sh_str = f"{sharpe:.2f}"
+        else:
+            avg_str = f"{avg_ret:.3%} ({avg_ret - baseline['avg_ret']:+.3%})"
+            sh_str = f"{sharpe:.2f} ({sharpe - baseline['sharpe']:+.2f})"
+
+        print(f"{slip:<10.1f} {int(row['n_trades']):<8} {row['win_rate']:.1%}   "
+              f"{avg_str:<20} {sh_str:<14} {row['max_dd']:.1%}")
+
+    print("="*78)
+
+    # -----------------------------------------------------------------
+    # GO Region logic
+    # -----------------------------------------------------------------
+    def max_slip_where(mask):
+        if results_df[mask].empty:
+            return None
+        return float(results_df[mask]["slip_bps"].max())
+
+    max_pos = max_slip_where(results_df["avg_ret"] > 0)
+    max_sharpe = max_slip_where(results_df["sharpe"] > 1.0)
+    max_dd = max_slip_where(results_df["max_dd"] > -0.15)
+
+    all_mask = (results_df["avg_ret"] > 0) & (results_df["sharpe"] > 1.0) & (results_df["max_dd"] > -0.15)
+    max_all = max_slip_where(all_mask)
+
+    print("\nGO REGION (max allowable slip)")
+    print("-"*78)
+    print(f"✅ avg_ret > 0      : {max_pos if max_pos is not None else 'NONE'} bps")
+    print(f"✅ Sharpe > 1.0     : {max_sharpe if max_sharpe is not None else 'NONE'} bps")
+    print(f"✅ MaxDD < 15%      : {max_dd if max_dd is not None else 'NONE'} bps")
+    print(f"🎯 ALL criteria pass: {max_all if max_all is not None else 'NONE'} bps")
+    print("-"*78)
+
+    if max_all is None:
+        print("❌ VERDICT: NO-GO - execution edge too thin under realistic slippage")
+    elif max_all >= 5:
+        print(f"🎯 VERDICT: GO - edge survives up to ~{max_all:.0f} bps adverse slippage")
+    else:
+        print(f"⚠️  VERDICT: MARGINAL - only survives ~{max_all:.0f} bps slippage")
+    print("="*78 + "\n")
+
+
+if __name__ == "__main__":
+    main()

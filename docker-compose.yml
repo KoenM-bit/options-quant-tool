@@ -42,6 +42,10 @@ x-airflow-common:
     # Logging
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     
+    # Slack Alerts
+    ENABLE_SLACK_ALERTS: ${ENABLE_SLACK_ALERTS:-false}
+    SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+    
     # MinIO S3-compatible storage
     MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
     MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}

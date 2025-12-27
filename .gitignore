@@ -39,6 +39,8 @@ env/
 .env
 .env.local
 .env.*.local
+.env.migration
+
 
 # Airflow
 airflow.db
@@ -86,3 +88,6 @@ credentials.json
 
 # Logs
 *.log
+
+# ML Models
+ML/
